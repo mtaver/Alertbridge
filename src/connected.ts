@@ -1,6 +1,5 @@
-import type { User } from '@supabase/supabase-js'
 import { supabase } from './supabase'
-import type { Answer, Category, Draft, Mode, Report, Status, StatusEvent } from './types'
+import type { Answer, Category, Mode, Report, Status, StatusEvent } from './types'
 
 interface HistoryRow { new_status: Status; changed_at: string; reason: string | null }
 interface ReportRow {
@@ -28,24 +27,6 @@ function mapReport(row: ReportRow): Report {
 }
 
 const reportSelection = 'id, created_at, mode, category, description, happening_now, anyone_injured, additional_details, latitude, longitude, status, report_status_history(new_status, changed_at, reason)'
-
-export async function submitConnectedReport(draft: Draft, user: User): Promise<Report> {
-  const client = requireClient()
-  const { data, error } = await client.from('incident_reports').insert({
-    reporter_id: user.id,
-    mode: draft.mode,
-    category: draft.category,
-    description: draft.description.trim(),
-    happening_now: draft.mode === 'guided' ? draft.happeningNow : null,
-    anyone_injured: draft.mode === 'guided' ? draft.anyoneInjured : null,
-    additional_details: draft.additionalDetails.trim() || null,
-    latitude: Number(draft.latitude),
-    longitude: Number(draft.longitude),
-    incident_at: new Date().toISOString(),
-  }).select(reportSelection).single()
-  if (error) throw error
-  return mapReport(data as unknown as ReportRow)
-}
 
 export async function fetchConnectedReports(): Promise<Report[]> {
   const client = requireClient()

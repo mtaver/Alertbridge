@@ -73,6 +73,15 @@ export interface AssistanceAction {
   recordedAt: string
 }
 
+export interface ReportMessage {
+  id: string
+  reportId: string
+  senderId: string
+  authorRole: 'Reporter' | 'Responder'
+  body: string
+  createdAt: string
+}
+
 export interface AlertDraft {
   title: string
   summary: string

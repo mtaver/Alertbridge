@@ -3,7 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import {
   AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronRight, ClipboardList,
   FileText, Flame, HelpCircle, Home as HomeIcon, LocateFixed, MapPin,
-  LogIn, LogOut, Megaphone, Menu, Mountain, RefreshCw, ShieldAlert, UserRound, Waves, X, XCircle,
+  LogIn, LogOut, Megaphone, Menu, MessageCircle, Mountain, RefreshCw, ShieldAlert, UserRound, Waves, X, XCircle,
 } from 'lucide-react'
 import type { Answer, Category, Draft, Mode, Report, Status } from './types'
 import { requiresStatusReason, validateDraft as getDraftErrors } from './validation'
@@ -12,10 +12,13 @@ import { changeConnectedStatus, fetchConnectedReports, fetchResponderMembership,
 import { isSupabaseConfigured, supabase } from './supabase'
 import { AlertPublisher, CommunityAlertsFeed } from './CommunityAlerts'
 import { submitReportingChannels } from './reportingChannels'
+import { reportingErrorMessage } from './reportingErrors'
 import { AssistancePanel } from './AssistancePanel'
 import { removePublicAlertSubscription, subscribeToPrivateReportChanges } from './alertRealtime'
 import { PlaceSearch } from './PlaceSearch'
 import { generatePublicSummary } from './publicSummary'
+import { ReportConversation } from './ReportConversation'
+import { fetchUnreadMessageCounts } from './reportMessages'
 
 type Screen = 'home' | 'alerts' | 'report' | 'review' | 'confirmation' | 'dashboard' | 'detail' | 'auth' | 'account'
 
@@ -59,6 +62,7 @@ function App() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [passwordRecovery, setPasswordRecovery] = useState(false)
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
 
   const selectedReport = connectedReports.find((report) => report.id === selectedId)
 
@@ -75,7 +79,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!session) { setConnectedReports([]); setIsResponder(false); return }
+    if (!session) { setConnectedReports([]); setUnreadCounts({}); setIsResponder(false); return }
     void refreshConnectedData(session.user.id)
   }, [session])
 
@@ -86,6 +90,11 @@ function App() {
     })
     return () => { void removePublicAlertSubscription(channel) }
   }, [session, isResponder])
+
+  useEffect(() => {
+    if (!session || screen !== 'dashboard') return
+    void fetchUnreadMessageCounts().then(setUnreadCounts).catch(() => setDataError('Could not load unread message counts. Use Refresh to retry.'))
+  }, [screen, session])
 
   async function refreshConnectedData(userId = session?.user.id) {
     if (!userId) return
@@ -173,7 +182,7 @@ function App() {
       setSubmittedId([result.reportId, result.postId].filter(Boolean).join(' / '))
       navigate('confirmation')
     } catch (caught) {
-      setSubmitError(caught instanceof Error ? caught.message : 'The report could not be submitted. Your entries are still here; please retry.')
+      setSubmitError(reportingErrorMessage(caught))
     } finally { setSubmitting(false) }
   }
 
@@ -211,8 +220,8 @@ function App() {
         {screen === 'report' && <ReportForm draft={draft} errors={errors} update={updateDraft} useLocation={useLocation} locating={locating} geoMessage={geoMessage} usePublicLocation={usePublicLocation} publicLocating={publicLocating} publicGeoMessage={publicGeoMessage} cancel={() => navigate('home')} review={() => validateDraft() && navigate('review')} />}
         {screen === 'review' && <Review submitting={submitting} submitError={submitError} draft={draft as Draft & { mode: Mode; category: Category }} edit={() => navigate('report')} submit={submitReport} />}
         {screen === 'confirmation' && <Confirmation id={submittedId} another={startReport} dashboard={() => navigate('dashboard')} />}
-        {screen === 'dashboard' && session && <Dashboard responder={isResponder} loading={dataLoading} error={dataError} reports={connectedReports} open={(id) => { setSelectedId(id); navigate('detail') }} refresh={() => void refreshConnectedData()} openAlerts={() => navigate('alerts')} />}
-        {screen === 'detail' && session && selectedReport && <ReportDetail canUpdate={isResponder} report={selectedReport} back={() => navigate('dashboard')} updateStatus={changeStatusConnected} />}
+        {screen === 'dashboard' && session && <Dashboard responder={isResponder} loading={dataLoading} error={dataError} reports={connectedReports} unreadCounts={unreadCounts} open={(id) => { setSelectedId(id); navigate('detail') }} refresh={() => { void refreshConnectedData(); void fetchUnreadMessageCounts().then(setUnreadCounts) }} openAlerts={() => navigate('alerts')} />}
+        {screen === 'detail' && session && selectedReport && <ReportDetail canUpdate={isResponder} currentUserId={session.user.id} report={selectedReport} back={() => navigate('dashboard')} updateStatus={changeStatusConnected} conversationRead={() => setUnreadCounts((current) => ({ ...current, [selectedReport.id]: 0 }))} />}
       </main>
       <footer><span className="footer-brand"><ShieldAlert size={18} /> AlertBridge</span><span>Reports are stored in AlertBridge · Emergency services are not connected</span></footer>
     </div>
@@ -344,7 +353,7 @@ function Confirmation({ id, another, dashboard }: { id: string; another: () => v
   return <section className="page confirmation"><div className="success-icon"><Check /></div><span className="mini-label">SUBMITTED TO ALERTBRIDGE</span><h1>Your report has been submitted.</h1><p className="lead">AlertBridge storage accepted the report. Emergency services have not been notified.</p><div className="id-card"><span>REPORT ID</span><strong>{id}</strong><small>New reports begin as <b>Unverified</b>.</small></div><div className="confirmation-actions"><button className="primary" onClick={another}><AlertTriangle /> Report another incident</button><button className="secondary" onClick={dashboard}><ClipboardList /> View my reports</button></div></section>
 }
 
-function Dashboard({ responder, loading, error, reports, open, refresh, openAlerts }: { responder: boolean; loading: boolean; error: string; reports: Report[]; open: (id: string) => void; refresh: () => void; openAlerts: () => void }) {
+function Dashboard({ responder, loading, error, reports, unreadCounts, open, refresh, openAlerts }: { responder: boolean; loading: boolean; error: string; reports: Report[]; unreadCounts: Record<string, number>; open: (id: string) => void; refresh: () => void; openAlerts: () => void }) {
   const counts = useMemo(() => ({ all: reports.length, unverified: reports.filter((r) => r.status === 'Unverified').length, active: reports.filter((r) => ['Under review', 'Verified'].includes(r.status)).length }), [reports])
   return <section className="page dashboard-page"><div className="dashboard-banner"><ShieldAlert /><div><b>{responder ? 'Authorised responder dashboard' : 'Your reports'}</b><span>{responder ? 'Access is enforced by database membership and row-level security. No emergency agency connection is claimed.' : 'Only reports submitted by your account are visible. This is not an emergency service.'}</span></div></div>
     <div className="dashboard-heading"><div><span className="mini-label">REPORT OVERVIEW</span><h1>{responder ? 'Incident reports' : 'Community reports'}</h1><p>{responder ? 'Authorised reports loaded from AlertBridge storage for responder review.' : 'Reports submitted by your account and loaded from AlertBridge storage.'}</p></div><button className="primary" onClick={refresh}><RefreshCw /> Refresh list</button></div>
@@ -352,13 +361,13 @@ function Dashboard({ responder, loading, error, reports, open, refresh, openAler
     <div className="metrics"><div><span>All reports</span><strong>{counts.all}</strong></div><div><span>Needs review</span><strong>{counts.unverified}</strong></div><div><span>Active review</span><strong>{counts.active}</strong></div></div>
     {error && <p className="submission-error" role="alert"><XCircle /> {error}</p>}
     {loading ? <div className="empty-state"><ClipboardList /><h2>Loading reports…</h2></div> : reports.length === 0 ? <div className="empty-state"><ClipboardList /><h2>No reports yet</h2><p>Reports submitted through AlertBridge will appear here.</p></div> : <div className="report-list" role="list">
-      {reports.map((report) => <button key={report.id} className="report-item" onClick={() => open(report.id)} role="listitem"><span className="report-category-icon"><CategoryIcon category={report.category} /></span><span className="report-main"><b>{report.category}</b><small>{formatDate(report.createdAt)}</small><span><MapPin /> {shortLocation(report)}</span></span><span className={`status-pill ${report.status.toLowerCase().replace(' ', '-')}`}>{report.status}</span><ChevronRight className="chevron" /></button>)}
+      {reports.map((report) => <button key={report.id} className="report-item" onClick={() => open(report.id)} role="listitem"><span className="report-category-icon"><CategoryIcon category={report.category} /></span><span className="report-main"><b>{report.category}</b><small>{formatDate(report.createdAt)}</small><span><MapPin /> {shortLocation(report)}</span>{Boolean(unreadCounts[report.id]) && <span className="unread-badge"><MessageCircle /> {unreadCounts[report.id]} unread</span>}</span><span className={`status-pill ${report.status.toLowerCase().replace(' ', '-')}`}>{report.status}</span><ChevronRight className="chevron" /></button>)}
     </div>}
     <p className="privacy-note"><ShieldAlert /> {responder ? 'Precise incident locations are restricted to authorised responder tools and are never exposed in the public feed.' : 'Your precise incident locations remain private and are never exposed in the public feed.'}</p>
   </section>
 }
 
-function ReportDetail({ canUpdate, report, back, updateStatus }: { canUpdate: boolean; report: Report; back: () => void; updateStatus: (id: string, s: Status, r: string) => void | Promise<void> }) {
+function ReportDetail({ canUpdate, currentUserId, report, back, updateStatus, conversationRead }: { canUpdate: boolean; currentUserId: string; report: Report; back: () => void; updateStatus: (id: string, s: Status, r: string) => void | Promise<void>; conversationRead: () => void }) {
   const [pending, setPending] = useState<Status | ''>('')
   const [reason, setReason] = useState('')
   const [error, setError] = useState('')
@@ -378,6 +387,7 @@ function ReportDetail({ canUpdate, report, back, updateStatus }: { canUpdate: bo
     </div>
     <div className="history-card"><h2>Status history</h2><ol>{[...report.history].reverse().map((event, index) => <li key={`${event.at}-${index}`}><span className="timeline-dot"></span><div><b>{event.status}</b><time>{formatDate(event.at)}</time>{event.reason && <p>Reason: {event.reason}</p>}</div></li>)}</ol></div>
     <AssistancePanel reportId={report.id} canRecord={canUpdate} />
+    <ReportConversation reportId={report.id} currentUserId={currentUserId} onRead={conversationRead} />
     {canUpdate && <AlertPublisher report={report} />}
   </section>
 }

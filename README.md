@@ -104,6 +104,8 @@ Deployment does not connect AlertBridge to an emergency service or agency. Keep 
    3. `supabase/migrations/20261008000300_community_alert_realtime.sql`
    4. `supabase/migrations/20261008000400_reporting_channels.sql`
    5. `supabase/migrations/20261009000100_separate_public_danger_zone.sql`
+   6. `supabase/migrations/20261009000200_abuse_protection.sql`
+   7. `supabase/migrations/20261009000300_private_report_messaging.sql`
 4. For a local Supabase stack, run `supabase start` followed by `supabase db reset`.
 5. For a hosted project, link it and preview before applying:
 
@@ -134,6 +136,47 @@ values ('RESPONDER_AUTH_USER_UUID', null);
 
 Do not expose either statement through the browser client. Remove membership only through trusted administrative database access.
 
+## Abuse protection and account suspension
+
+The database allows each account up to three successful new submissions in a rolling 10-minute window and ten in a rolling 24-hour window. The shared retry receipt counts a community warning, private assistance request, or atomic **Both** request as one submission. A successful retry with the same request ID returns its stored result and does not count again. Per-account transaction locks serialize simultaneous requests before counting. The interface displays the retry time returned by the database when a limit is reached. These limits reduce repeated submissions; they do not prevent all spam.
+
+Suspension is separate from responder membership. It blocks account write actions—including reporting, flagging, profile changes, and responder actions—without removing read access to public alerts or the account's own reports. Responder membership does not grant suspension powers. There is no suspension UI.
+
+Only a trusted administrator using **Supabase SQL Editor** or another privileged database connection can call the suspension function. Supply the target account ID, the intended state, a non-empty reason, and the administrator's own auth user ID:
+
+```sql
+select public.admin_set_account_suspension(
+  'TARGET_AUTH_USER_UUID'::uuid,
+  true,
+  'Reason for suspending this account',
+  'ADMIN_AUTH_USER_UUID'::uuid
+);
+```
+
+Restore the account through the same audited function:
+
+```sql
+select public.admin_set_account_suspension(
+  'TARGET_AUTH_USER_UUID'::uuid,
+  false,
+  'Reason for restoring this account',
+  'ADMIN_AUTH_USER_UUID'::uuid
+);
+```
+
+The browser roles and authorised responders have no execute permission on this function and no write permission on the suspension tables. Every state change appends an immutable history entry. Administrators can inspect the current state and history with read-only SQL:
+
+```sql
+select user_id, suspended, reason, changed_by, changed_at
+from public.account_suspensions
+where user_id = 'TARGET_AUTH_USER_UUID'::uuid;
+
+select action, reason, changed_by, changed_at
+from public.account_suspension_history
+where user_id = 'TARGET_AUTH_USER_UUID'::uuid
+order by changed_at;
+```
+
 ## Security model
 
 - Profiles are linked to `auth.users`; users can read their own profile and update only their display name.
@@ -145,6 +188,8 @@ Do not expose either statement through the browser client. Remove membership onl
 - Status changes use one transactional, security-definer RPC that checks responder membership, locks the report, validates the transition, updates the report, and inserts immutable history.
 - Verification and rejection require a non-whitespace reason in both the interface and database.
 - Security-definer functions use an empty `search_path` and schema-qualified object names.
+- Submission limits and account suspension are enforced in database write paths rather than relying on interface controls.
+- Private report messages are readable only by the report owner and authorised responders. They are immutable and cannot be inserted directly through table grants.
 
 ## Implemented application behaviour
 
@@ -174,6 +219,8 @@ Do not expose either statement through the browser client. Remove membership onl
 - Retry-safe connected submission through a client request ID and transactional database receipt
 - Private assistance acknowledgement, coordination notes and documented agency handoffs kept separate from report verification and resolution
 - Responder-only private-report Realtime signals that contain IDs only and are unavailable to public subscribers
+- Private reporter–responder conversations on assistance reports, with plain-text messages, author roles, timestamps, unread indicators, retry-safe sends and scoped live refresh
+- A separate database message limit of 10 successful messages per minute and 100 per 24 hours per account; retrying a completed client request ID does not count again
 
 ## Community Alerts privacy model
 
@@ -189,9 +236,13 @@ Authenticated community posts are stored in `community_posts`, separately from `
 
 Private assistance updates use `private_report_events`. RLS permits only authorised responders to read that Realtime signal. Public clients never subscribe to it. An agency handoff can be recorded only after a responder enters the agency, actual handoff time, and a reference or note. Recording that history does not itself contact an agency.
 
+Private conversations are linked only to `incident_reports`, so community-only posts have no conversation. `report_messages` is not referenced by either public-feed view. Its RLS policy permits the report owner and authorised responders, while anonymous visitors and unrelated users receive no rows. Direct inserts, updates and deletes are unavailable to browser roles; sending uses a retry-safe RPC and stored author role. Suspended accounts cannot send.
+
+Realtime subscriptions listen only to metadata rows in `private_message_events`, filtered to the currently open report. Message bodies are fetched separately through RLS. The subscription is removed when the report closes or the component unmounts, and reconnecting refetches current messages. Messages do not provide external SMS/email delivery, attachments, public comments, or evidence that officers or emergency services were dispatched.
+
 ## Verification
 
-The current automated suite contains **52 passing tests**. `npm test` covers frontend validation, connected-only access boundaries, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
+The current automated suite contains **73 passing tests**. `npm test` covers frontend validation, connected-only access boundaries, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, submission and message-limit contracts, retry counting, concurrency locks, suspension coverage, messaging privacy, immutable messages, scoped Realtime cleanup, unread behavior, restoration auditing, and unauthorised access, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
 
 User-observed checks confirmed that an authenticated account could publish a public community warning, an authorised responder could verify it, and removal caused it to disappear from another account's Community Alerts feed.
 
@@ -199,9 +250,12 @@ GPS proximity warnings have been exercised with controlled coordinates in automa
 
 Without a configured Supabase project, these checks do **not** prove live authentication email delivery, hosted redirect settings, applied RLS behaviour, or remote migration state. After creating a project, apply the migration and perform live tests with at least two ordinary users and one administrator-assigned responder.
 
+The abuse-protection and private-messaging migrations have been applied, but complete live verification is still pending. Abuse-protection live verification must cover suspension, restoration, suspended-account reads and writes, and the 24-hour boundary without changing timestamps or deleting receipts. Messaging live verification must use an ordinary report owner, another ordinary user, an authorised responder and a signed-out client to confirm cross-user/public denial, responder access, retry safety, message-limit boundaries, suspension blocking, unread state and Realtime reconnect behavior.
+
 ## Current limitations
 
 - No public incident map, route guidance, SMS fallback, or audio prompts
+- Private conversations do not support attachments or external SMS/email delivery
 - No offline transmission
 - Nearby monitoring and browser notifications are foreground-only and work only while the application is open; there is no Web Push, dependable background delivery or offline warning delivery yet
 - Destination checks cover the selected area only, not the journey, and do not provide route avoidance
