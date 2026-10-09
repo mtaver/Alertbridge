@@ -57,6 +57,46 @@ VITE_MAPBOX_ACCESS_TOKEN=your-public-url-restricted-token
 
 Search text is sent to Mapbox only after the user selects **Search**. GPS coordinates are not sent to Mapbox by nearby monitoring. Without this variable, GPS selection and the advanced manual-coordinate fallback continue to work; the interface explains that place search is unavailable.
 
+## Vercel deployment preparation
+
+This repository is a Vite single-page application. Its deployment settings are:
+
+- Framework preset: **Vite**
+- Build command: `pnpm run build`
+- Output directory: `dist`
+- Root directory: repository root
+
+`vercel.json` rewrites application paths to `index.html` so direct links and authentication returns load the SPA. Static build assets continue to be served by Vercel.
+
+Configure these environment-variable names in Vercel Project Settings:
+
+- `VITE_SUPABASE_URL` — required for Connected mode
+- `VITE_SUPABASE_ANON_KEY` — required for Connected mode; use only the public browser key, never a service-role key
+- `VITE_MAPBOX_ACCESS_TOKEN` — optional; place search remains unavailable when omitted
+
+Set the required Supabase variables for Production and any Preview environment where Connected mode should work. Environment-variable changes require a new Vercel build.
+
+### Supabase authentication URLs after the hosted URL is known
+
+The sign-up verification and password-reset code both redirect to `window.location.origin`. After Vercel assigns the production URL, open **Supabase Dashboard → Authentication → URL Configuration** and:
+
+1. Set **Site URL** to the exact production HTTPS origin, for example `https://your-alertbridge-domain.example`.
+2. Add that same exact production origin to **Redirect URLs**.
+3. Keep the existing local redirect URLs, including `http://localhost:5173` and `http://127.0.0.1:5173`; do not replace them.
+4. If authentication must work on Vercel Preview deployments, add a narrowly scoped preview wildcard for the project's Vercel account or team. Keep the production URL exact.
+5. Confirm the Supabase email templates use the redirect destination when customized, then test both a new-account verification link and a password-reset link against the deployed origin.
+
+Deployment does not connect AlertBridge to an emergency service or agency. Keep the in-app notice visible: reports stored in AlertBridge do not notify or dispatch emergency responders.
+
+### Import into Vercel
+
+1. In Vercel, choose **Add New → Project** and import the GitHub repository `mtaver/Alertbridge`.
+2. Leave the root directory at the repository root and select the **Vite** framework preset.
+3. Confirm the build command is `pnpm run build` and the output directory is `dist`.
+4. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Add `VITE_MAPBOX_ACCESS_TOKEN` only if place search is wanted.
+5. Review the settings, but do not deploy until the Supabase production Site URL and Redirect URL plan is ready.
+6. After the first deployment supplies the final HTTPS URL, update Supabase URL Configuration as described above and redeploy if any Vercel environment variables changed.
+
 ## Supabase project setup
 
 1. Create a Supabase project. No project is created or linked automatically by this repository.
