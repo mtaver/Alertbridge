@@ -1,63 +1,182 @@
 # AlertBridge
 
-AlertBridge is a first-stage demonstration of a community safety and emergency navigation app. It lets people record security threats and natural hazards through guided questions or a written description, then demonstrates how a responder might review those reports.
+AlertBridge is a community safety reporting prototype for security threats and natural hazards. It supports a browser-local demonstration mode and an optional Supabase-connected mode with accounts, private report storage, and database-enforced responder access.
 
-> **Important:** This is a demonstration prototype. Reports are stored only in the current browser and are not sent to emergency services or any agency.
+> AlertBridge is not an emergency service, does not notify emergency services, and does not claim an agency partnership or guaranteed rescue response.
 
 ## Run locally
 
-Requirements: a current Node.js LTS release and npm.
+Requirements: a current Node.js release and npm or pnpm.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite (usually `http://localhost:5173`).
-
-To make and preview a production build:
+Open the URL printed by Vite, normally `http://localhost:5173`.
 
 ```bash
+npm test
+npm run check
 npm run build
 npm run preview
 ```
 
-Run the strict TypeScript check with:
+## Modes
+
+### Demo mode
+
+Demo mode remains available without configuration. Reports and simulated responder status changes stay in that browser's `localStorage`. They are clearly labelled as demo data and are never uploaded automatically.
+
+### Connected mode
+
+Connected mode appears when both public Supabase variables are configured. It provides email/password sign-up and sign-in, email verification, password reset, session restoration, display names, private report storage, own-report history, and an authorised responder dashboard.
+
+Copy the example file and fill in the public browser values from **Supabase Dashboard → Project Settings → API**:
 
 ```bash
-npm run check
+cp .env.example .env.local
 ```
 
-Run the focused validation and persistence-parser tests with:
-
-```bash
-npm test
+```dotenv
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-public-anon-key
 ```
 
-## Implemented
+The anon/publishable key is intended for browser clients and is constrained by row-level security. Never put a service-role key, database password, personal access token, or other secret in `.env.example`, a `VITE_` variable, frontend code, or Git.
 
-- Responsive home page with prominent incident reporting and prototype warning
-- Guided-question and free-written report modes
-- Security threat, flood, landslide, fire, and other categories
-- Required-field and coordinate-range validation, including rejection of whitespace-only descriptions
-- Browser location requested only after the user selects **Use my location**, with permission, timeout, and unavailable-location handling
-- Manual latitude and longitude entry
-- Review step before saving
-- Local browser persistence through `localStorage`, report IDs, and an initial **Unverified** status
-- Defensive parsing ignores malformed locally stored data instead of allowing it to crash the dashboard
-- Simulated responder dashboard with report list, detail view, status changes, required verification/rejection reasons, and status history
-- Accessible form labels, visible focus states, strong contrast, large touch targets, and text paired with icons
-- Precise coordinates kept out of any public-feed concept and limited to report/reviewer screens
+Restart Vite after changing environment variables.
 
-## Prototype limitations
+### Optional place search
 
-- No backend, shared database, accounts, authentication, or real responder access control
-- Reports and status changes exist only in one browser's local storage; clearing site data removes them
-- Nothing is transmitted to emergency services and no agency partnership is implied
-- No location-based warnings, route suggestions, SMS fallback, or audio prompts yet
-- Browser geolocation depends on device support, user permission, and a secure browser context (HTTPS or localhost)
-- No offline transmission is provided, and the prototype does not claim or calculate guaranteed safe routes
+Incident and destination place search uses the Mapbox Geocoding v6 REST API directly and adds no map-library dependency. Create a public Mapbox access token, restrict it to the application's allowed URLs in Mapbox, and set:
+
+```dotenv
+VITE_MAPBOX_ACCESS_TOKEN=your-public-url-restricted-token
+```
+
+Search text is sent to Mapbox only after the user selects **Search**. GPS coordinates are not sent to Mapbox by nearby monitoring. Without this variable, GPS selection and the advanced manual-coordinate fallback continue to work; the interface explains that place search is unavailable.
+
+## Supabase project setup
+
+1. Create a Supabase project. No project is created or linked automatically by this repository.
+2. Install the Supabase CLI and a supported container runtime if you want to test locally.
+3. Apply migrations in filename order:
+
+   1. `supabase/migrations/20261008000100_alertbridge_core.sql`
+   2. `supabase/migrations/20261008000200_community_alerts.sql`
+   3. `supabase/migrations/20261008000300_community_alert_realtime.sql`
+   4. `supabase/migrations/20261008000400_reporting_channels.sql`
+   5. `supabase/migrations/20261009000100_separate_public_danger_zone.sql`
+4. For a local Supabase stack, run `supabase start` followed by `supabase db reset`.
+5. For a hosted project, link it and preview before applying:
+
+   ```bash
+   supabase link --project-ref YOUR_PROJECT_REF
+   supabase db push --dry-run
+   supabase db push
+   ```
+
+6. In **Authentication → URL Configuration**, set the Site URL for the deployed app and add every allowed redirect URL. For local development, include `http://localhost:5173` and `http://127.0.0.1:5173`. Add the exact production HTTPS origin before deployment. Sign-up verification and password reset both redirect to the app origin.
+7. Keep email confirmation enabled if accounts must verify their address before receiving a session. Configure a production SMTP provider before relying on email delivery in production.
+
+## Assign the first responder
+
+Users cannot grant themselves responder access. A trusted administrator must run this using the Supabase SQL Editor or another trusted server-side database connection after the user has registered:
+
+```sql
+insert into public.authorized_responders (user_id, assigned_by)
+values ('RESPONDER_AUTH_USER_UUID', 'ADMIN_AUTH_USER_UUID');
+```
+
+For the first assignment, `assigned_by` may be `null` if there is no administrator auth user yet:
+
+```sql
+insert into public.authorized_responders (user_id, assigned_by)
+values ('RESPONDER_AUTH_USER_UUID', null);
+```
+
+Do not expose either statement through the browser client. Remove membership only through trusted administrative database access.
+
+## Security model
+
+- Profiles are linked to `auth.users`; users can read their own profile and update only their display name.
+- Authenticated users can insert reports only with their own user ID. Database defaults and RLS require the initial status to be **Unverified**.
+- Users can read only their own reports and corresponding history.
+- Direct client updates and deletes on reports and history are not granted.
+- Responder membership has no client insert, update, or delete grant.
+- Authorised responders can read reports through RLS.
+- Status changes use one transactional, security-definer RPC that checks responder membership, locks the report, validates the transition, updates the report, and inserts immutable history.
+- Verification and rejection require a non-whitespace reason in both the interface and database.
+- Security-definer functions use an empty `search_path` and schema-qualified object names.
+
+## Implemented application behaviour
+
+- Guided-question and written-report modes with coordinate and required-field validation
+- Browser geolocation only after explicit selection, plus manual coordinates
+- Review before submission and retry without losing form contents
+- Duplicate connected submissions prevented while a request is in progress
+- Confirmation shown only after a successful database response
+- Connected confirmations say **Submitted to AlertBridge**, never that emergency services were notified
+- Email/password account creation, sign-in/out, verification messaging, password reset/recovery, and session restoration
+- Display-name management
+- Own-report connected dashboard and database-authorised responder controls
+- Existing simulated responder dashboard retained in demo mode
+- Defensive parsing for malformed local demo storage
+- Public Community Alerts feed for signed-in and signed-out visitors
+- Category, affected-area and opt-in Near me filtering; visitor coordinates remain in memory on the device
+- Responder-authored publication linked to—but stored separately from—a Verified private report
+- Explicit public fields, optional public danger zones, expiry handling and active/resolved/expired presentation
+- Responder updates, resolution and withdrawal with append-only alert audit history
+- Verification never publishes an incident automatically
+- Public-alert live refresh through a metadata-only Supabase Realtime signal; reconnects refetch the safe public view
+- Opt-in foreground location monitoring with configurable approach distance, duplicate suppression and repeat warnings after material alert updates
+- Optional foreground browser notifications and destination-area coordinate checks
+- Connected reporting choices for a public community warning, a private assistance request, or an atomic linked submission containing both
+- Separate coordinates for private assistance and the public danger zone; device coordinates are published only after the reporter explicitly chooses the public-location control
+- Primary GPS location actions, optional place search, and advanced manual-coordinate disclosures for incident and destination selection
+- Editable, category-specific public-summary templates for guided reports; generation is explicit and never reads private descriptions, additional details or reporter identity
+- Authenticated community warnings clearly labelled **Community report — unverified**, with responder verification/removal, abuse reporting and immutable moderation history
+- Retry-safe connected submission through a client request ID and transactional database receipt
+- Private assistance acknowledgement, coordination notes and documented agency handoffs kept separate from report verification and resolution
+- Responder-only private-report Realtime signals that contain IDs only and are unavailable to public subscribers
+
+## Community Alerts privacy model
+
+The public feed reads `public.community_alert_feed`, an explicit-field view. It does not expose `source_report_id`, reporter identity, email, private coordinates, raw questionnaire answers, private description, responder identity, or private report/status history. The underlying alert tables are not readable or writable by anonymous visitors. Public writes are unavailable; responder-only security-definer RPCs enforce publication eligibility and append audit history transactionally.
+
+The optional danger-zone coordinates are responder-authored public data and are separate from the reporter's private incident coordinates. The browser requests visitor geolocation only after **Near me** is selected and keeps it in component memory for local distance calculations.
+
+Community-warning submissions use dedicated public latitude, longitude and radius fields. **Use my location for public danger zone** is a separate explicit action and should be used only when the incident is at the reporter's current location. A **Both** submission never copies the private assistance coordinates into the public post. Responders publishing verified alerts may manually enter a danger zone or select the private incident location for review, but must explicitly confirm the public coordinates and radius before publishing.
+
+Realtime clients subscribe only to `community_alert_events`, which contains an alert ID and change time but no report, reporter, responder, location or alert content. Each event causes the browser to refetch `community_alert_feed`. The app never subscribes to private incident reports or private history.
+
+Authenticated community posts are stored in `community_posts`, separately from `incident_reports` and responder-curated `community_alerts`. The public view exposes only approved warning fields. For a **Both** submission, `linked_report_id` is an internal relationship and is never selected by the public view. User-written summaries are rendered as React text rather than injected HTML.
+
+Private assistance updates use `private_report_events`. RLS permits only authorised responders to read that Realtime signal. Public clients never subscribe to it. An agency handoff can be recorded only after a responder enters the agency, actual handoff time, and a reference or note. Recording that history does not itself contact an agency.
+
+## Verification
+
+The current automated suite contains **52 passing tests**. `npm test` covers frontend validation and persistence, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
+
+User-observed checks confirmed that an authenticated account could publish a public community warning, an authorised responder could verify it, and removal caused it to disappear from another account's Community Alerts feed.
+
+GPS proximity warnings have been exercised with controlled coordinates in automated tests, but have **not yet been verified on a physical device**. Physical-device checks are still required for real GPS accuracy, permission behavior, foreground monitoring and browser notification behavior.
+
+Without a configured Supabase project, these checks do **not** prove live authentication email delivery, hosted redirect settings, applied RLS behaviour, or remote migration state. After creating a project, apply the migration and perform live tests with at least two ordinary users and one administrator-assigned responder.
+
+## Current limitations
+
+- No public incident map, route guidance, SMS fallback, or audio prompts
+- No offline transmission
+- Nearby monitoring and browser notifications are foreground-only and work only while the application is open; there is no Web Push, dependable background delivery or offline warning delivery yet
+- Destination checks cover the selected area only, not the journey, and do not provide route avoidance
+- Community warnings are unverified unless a responder explicitly verifies them; nearby warnings default to responder-verified information only
+- No agency messaging or rescue-dispatch integration exists; a recorded handoff is documentation, not transmission
+- No emergency service or agency is connected; AlertBridge does not notify or dispatch emergency responders
+- Demo data and connected data are deliberately separate
+- Connected-mode availability depends on the configured Supabase project and email provider
 
 ## Technology
 
-React, TypeScript, Vite, Lucide icons, and browser `localStorage`.
+React, TypeScript, Vite, Supabase JavaScript client, PostgreSQL migrations, Lucide icons, and browser `localStorage` for demo mode.
