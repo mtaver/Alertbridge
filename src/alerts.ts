@@ -9,7 +9,7 @@ interface AlertRow {
 }
 
 function client() {
-  if (!supabase) throw new Error('Connected mode is not configured.')
+  if (!supabase) throw new Error('AlertBridge service is unavailable.')
   return supabase
 }
 

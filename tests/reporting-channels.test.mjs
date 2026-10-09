@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 const sql = readFileSync(new URL('../supabase/migrations/20261008000400_reporting_channels.sql', import.meta.url), 'utf8')
 const gpsSql = readFileSync(new URL('../supabase/migrations/20261009000100_separate_public_danger_zone.sql', import.meta.url), 'utf8')
@@ -64,13 +64,27 @@ test('UI labels community posts and defaults nearby warnings to verified sources
   assert.doesNotMatch(feed, /dangerouslySetInnerHTML/)
 })
 
-test('dashboard keeps demo and connected report data sources separate', () => {
-  assert.match(app, /const activeReports = appMode === 'demo' \? reports : connectedReports/)
-  assert.match(app, /reports=\{activeReports\}/)
-  assert.match(app, /appMode !== 'connected' \|\| !session[\s\S]*setConnectedReports\(\[\]\)/)
+test('application uses only Supabase workflows and does not read browser-local demo reports', () => {
+  assert.doesNotMatch(app, /appMode|loadReports|saveReports|localStorage|Demo mode|simulated responder/i)
+  assert.equal(existsSync(new URL('../src/storage.ts', import.meta.url)), false)
+  assert.match(app, /if \(!isSupabaseConfigured\) return <ServiceUnavailable \/>/)
+  assert.match(app, /function startReport\(\)[\s\S]*if \(!session\) \{ navigate\('auth'\); return \}/)
+  assert.match(app, /screen === 'alerts' && <CommunityAlertsFeed session=\{session\}/)
+  assert.match(app, /screen === 'dashboard' && session && <Dashboard/)
   assert.match(app, /fetchConnectedReports\(\)/)
-  assert.match(app, /Authorised reports loaded from AlertBridge storage for responder review/)
   assert.match(app, /Precise incident locations are restricted to authorised responder tools/)
+})
+
+test('public alerts remain available signed out while reporting requires authentication', () => {
+  assert.match(app, /screen === 'alerts' && <CommunityAlertsFeed session=\{session\}/)
+  assert.match(app, /function startReport\(\)[\s\S]*if \(!session\) \{ navigate\('auth'\); return \}/)
+  assert.match(sql, /if auth\.uid\(\) is null then raise exception 'Authentication required'/i)
+})
+
+test('missing Supabase configuration shows service unavailable instead of a demo fallback', () => {
+  assert.match(app, /if \(!isSupabaseConfigured\) return <ServiceUnavailable \/>/)
+  assert.match(app, /AlertBridge cannot connect\./)
+  assert.doesNotMatch(app, /switchMode|appMode|Demo mode/i)
 })
 
 test('authorised responder dashboard links to public community-post moderation', () => {

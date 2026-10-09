@@ -1,6 +1,6 @@
 # AlertBridge
 
-AlertBridge is a community safety reporting prototype for security threats and natural hazards. It supports a browser-local demonstration mode and an optional Supabase-connected mode with accounts, private report storage, and database-enforced responder access.
+AlertBridge is a community safety reporting prototype for security threats and natural hazards. It uses Supabase accounts, private report storage, public community alerts, and database-enforced responder access.
 
 > AlertBridge is not an emergency service, does not notify emergency services, and does not claim an agency partnership or guaranteed rescue response.
 
@@ -22,15 +22,11 @@ npm run build
 npm run preview
 ```
 
-## Modes
+## Supabase configuration
 
-### Demo mode
+Supabase configuration is required. Without both public Supabase variables, the app shows a service-unavailable message instead of offering reporting or account workflows. Community Alerts remain readable without signing in when the service is configured; posting a warning or requesting assistance requires an account.
 
-Demo mode remains available without configuration. Reports and simulated responder status changes stay in that browser's `localStorage`. They are clearly labelled as demo data and are never uploaded automatically.
-
-### Connected mode
-
-Connected mode appears when both public Supabase variables are configured. It provides email/password sign-up and sign-in, email verification, password reset, session restoration, display names, private report storage, own-report history, and an authorised responder dashboard.
+Earlier releases stored demonstration reports under the browser-local key `alertbridge-demo-reports-v1`. The connected-only app does not read, upload, modify, or delete that existing data.
 
 Copy the example file and fill in the public browser values from **Supabase Dashboard → Project Settings → API**:
 
@@ -70,11 +66,11 @@ This repository is a Vite single-page application. Its deployment settings are:
 
 Configure these environment-variable names in Vercel Project Settings:
 
-- `VITE_SUPABASE_URL` — required for Connected mode
-- `VITE_SUPABASE_ANON_KEY` — required for Connected mode; use only the public browser key, never a service-role key
+- `VITE_SUPABASE_URL` — required
+- `VITE_SUPABASE_ANON_KEY` — required; use only the public browser key, never a service-role key
 - `VITE_MAPBOX_ACCESS_TOKEN` — optional; place search remains unavailable when omitted
 
-Set the required Supabase variables for Production and any Preview environment where Connected mode should work. Environment-variable changes require a new Vercel build.
+Set the required Supabase variables for Production and any Preview environment where AlertBridge should work. Environment-variable changes require a new Vercel build.
 
 ### Supabase authentication URLs after the hosted URL is known
 
@@ -155,14 +151,12 @@ Do not expose either statement through the browser client. Remove membership onl
 - Guided-question and written-report modes with coordinate and required-field validation
 - Browser geolocation only after explicit selection, plus manual coordinates
 - Review before submission and retry without losing form contents
-- Duplicate connected submissions prevented while a request is in progress
+- Duplicate submissions prevented while a request is in progress
 - Confirmation shown only after a successful database response
-- Connected confirmations say **Submitted to AlertBridge**, never that emergency services were notified
+- Confirmations say **Submitted to AlertBridge**, never that emergency services were notified
 - Email/password account creation, sign-in/out, verification messaging, password reset/recovery, and session restoration
 - Display-name management
-- Own-report connected dashboard and database-authorised responder controls
-- Existing simulated responder dashboard retained in demo mode
-- Defensive parsing for malformed local demo storage
+- Own-report dashboard and database-authorised responder controls
 - Public Community Alerts feed for signed-in and signed-out visitors
 - Category, affected-area and opt-in Near me filtering; visitor coordinates remain in memory on the device
 - Responder-authored publication linked to—but stored separately from—a Verified private report
@@ -172,7 +166,7 @@ Do not expose either statement through the browser client. Remove membership onl
 - Public-alert live refresh through a metadata-only Supabase Realtime signal; reconnects refetch the safe public view
 - Opt-in foreground location monitoring with configurable approach distance, duplicate suppression and repeat warnings after material alert updates
 - Optional foreground browser notifications and destination-area coordinate checks
-- Connected reporting choices for a public community warning, a private assistance request, or an atomic linked submission containing both
+- Reporting choices for a public community warning, a private assistance request, or an atomic linked submission containing both
 - Separate coordinates for private assistance and the public danger zone; device coordinates are published only after the reporter explicitly chooses the public-location control
 - Primary GPS location actions, optional place search, and advanced manual-coordinate disclosures for incident and destination selection
 - Editable, category-specific public-summary templates for guided reports; generation is explicit and never reads private descriptions, additional details or reporter identity
@@ -197,7 +191,7 @@ Private assistance updates use `private_report_events`. RLS permits only authori
 
 ## Verification
 
-The current automated suite contains **52 passing tests**. `npm test` covers frontend validation and persistence, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
+The current automated suite contains **52 passing tests**. `npm test` covers frontend validation, connected-only access boundaries, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
 
 User-observed checks confirmed that an authenticated account could publish a public community warning, an authorised responder could verify it, and removal caused it to disappear from another account's Community Alerts feed.
 
@@ -214,9 +208,8 @@ Without a configured Supabase project, these checks do **not** prove live authen
 - Community warnings are unverified unless a responder explicitly verifies them; nearby warnings default to responder-verified information only
 - No agency messaging or rescue-dispatch integration exists; a recorded handoff is documentation, not transmission
 - No emergency service or agency is connected; AlertBridge does not notify or dispatch emergency responders
-- Demo data and connected data are deliberately separate
-- Connected-mode availability depends on the configured Supabase project and email provider
+- Availability depends on the configured Supabase project and email provider
 
 ## Technology
 
-React, TypeScript, Vite, Supabase JavaScript client, PostgreSQL migrations, Lucide icons, and browser `localStorage` for demo mode.
+React, TypeScript, Vite, Supabase JavaScript client, PostgreSQL migrations, and Lucide icons.

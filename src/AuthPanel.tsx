@@ -49,9 +49,9 @@ export function AuthPanel({ back, recovery = false }: { back: () => void; recove
   return <section className="page auth-page">
     <button className="back-link" onClick={back}><ArrowLeft /> Back</button>
     <div className="auth-card">
-      <span className="mini-label">CONNECTED MODE ACCOUNT</span>
+      <span className="mini-label">ALERTBRIDGE ACCOUNT</span>
       <h1>{view === 'signin' ? 'Sign in' : view === 'signup' ? 'Create an account' : view === 'forgot' ? 'Reset your password' : 'Choose a new password'}</h1>
-      <p>Connected accounts store reports securely in your configured AlertBridge Supabase project. This does not notify emergency services.</p>
+      <p>Your account stores reports in AlertBridge. This does not notify emergency services.</p>
       <form onSubmit={submit}>
         {view === 'signup' && <label>Display name <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={80} autoComplete="name" /></label>}
         {view !== 'recovery' && <label>Email address <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" /></label>}
@@ -75,7 +75,7 @@ export function AccountPanel({ session, back, onSaved }: { session: Session; bac
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   return <section className="page auth-page"><button className="back-link" onClick={back}><ArrowLeft /> Back</button><div className="auth-card">
-    <span className="mini-label">CONNECTED MODE ACCOUNT</span><h1>Your account</h1><p>{session.user.email}</p>
+    <span className="mini-label">ALERTBRIDGE ACCOUNT</span><h1>Your account</h1><p>{session.user.email}</p>
     <form onSubmit={async (event) => { event.preventDefault(); setLoading(true); setError(''); try { await onSaved(name); setMessage('Display name updated.') } catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not update your profile.') } finally { setLoading(false) } }}>
       <label>Display name <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={80} /></label>
       {error && <p className="error-text" role="alert">{error}</p>}{message && <p className="auth-message" role="status">{message}</p>}

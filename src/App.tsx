@@ -5,7 +5,6 @@ import {
   FileText, Flame, HelpCircle, Home as HomeIcon, LocateFixed, MapPin,
   LogIn, LogOut, Megaphone, Menu, Mountain, RefreshCw, ShieldAlert, UserRound, Waves, X, XCircle,
 } from 'lucide-react'
-import { loadReports, saveReports } from './storage'
 import type { Answer, Category, Draft, Mode, Report, Status } from './types'
 import { requiresStatusReason, validateDraft as getDraftErrors } from './validation'
 import { AccountPanel, AuthPanel } from './AuthPanel'
@@ -19,7 +18,6 @@ import { PlaceSearch } from './PlaceSearch'
 import { generatePublicSummary } from './publicSummary'
 
 type Screen = 'home' | 'alerts' | 'report' | 'review' | 'confirmation' | 'dashboard' | 'detail' | 'auth' | 'account'
-type AppMode = 'demo' | 'connected'
 
 const categories: { name: Category; icon: typeof ShieldAlert; note: string }[] = [
   { name: 'Security threat', icon: ShieldAlert, note: 'Violence, danger or suspicious activity' },
@@ -41,11 +39,9 @@ function shortLocation(report: Report) {
 }
 
 function App() {
-  const [appMode, setAppMode] = useState<AppMode>('demo')
   const [screen, setScreen] = useState<Screen>('home')
   const [draft, setDraft] = useState<Draft>(blankDraft)
   const [submissionRequestId, setSubmissionRequestId] = useState(() => crypto.randomUUID())
-  const [reports, setReports] = useState<Report[]>(loadReports)
   const [selectedId, setSelectedId] = useState<string>('')
   const [submittedId, setSubmittedId] = useState('')
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -64,8 +60,7 @@ function App() {
   const [submitError, setSubmitError] = useState('')
   const [passwordRecovery, setPasswordRecovery] = useState(false)
 
-  const activeReports = appMode === 'demo' ? reports : connectedReports
-  const selectedReport = activeReports.find((report) => report.id === selectedId)
+  const selectedReport = connectedReports.find((report) => report.id === selectedId)
 
   useEffect(() => {
     if (!supabase) { setAuthLoading(false); return }
@@ -80,17 +75,17 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (appMode !== 'connected' || !session) { setConnectedReports([]); setIsResponder(false); return }
+    if (!session) { setConnectedReports([]); setIsResponder(false); return }
     void refreshConnectedData(session.user.id)
-  }, [appMode, session])
+  }, [session])
 
   useEffect(() => {
-    if (appMode !== 'connected' || !session || !isResponder) return
+    if (!session || !isResponder) return
     const channel = subscribeToPrivateReportChanges(() => {
       void fetchConnectedReports().then(setConnectedReports).catch(() => setDataError('Private report live refresh failed. Use Refresh to retry.'))
     })
     return () => { void removePublicAlertSubscription(channel) }
-  }, [appMode, session, isResponder])
+  }, [session, isResponder])
 
   async function refreshConnectedData(userId = session?.user.id) {
     if (!userId) return
@@ -113,7 +108,7 @@ function App() {
   }
 
   function startReport() {
-    if (appMode === 'connected' && !session) { navigate('auth'); return }
+    if (!session) { navigate('auth'); return }
     setDraft(blankDraft())
     setSubmissionRequestId(crypto.randomUUID())
     setErrors({})
@@ -170,42 +165,16 @@ function App() {
   async function submitReport() {
     if (submitting) return
     if (!draft.mode || !draft.category) return
-    if (appMode === 'connected') {
-      if (!session) { navigate('auth'); return }
-      setSubmitting(true); setSubmitError('')
-      try {
-        const result = await submitReportingChannels(draft, submissionRequestId)
-        await refreshConnectedData(session.user.id)
-        setSubmittedId([result.reportId, result.postId].filter(Boolean).join(' / '))
-        navigate('confirmation')
-      } catch (caught) {
-        setSubmitError(caught instanceof Error ? caught.message : 'The report could not be submitted. Your entries are still here; please retry.')
-      } finally { setSubmitting(false) }
-      return
-    }
-    const now = new Date().toISOString()
-    const id = `AB-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
-    const report: Report = {
-      id, createdAt: now, mode: draft.mode, category: draft.category,
-      description: draft.description.trim(),
-      ...(draft.mode === 'guided' ? { happeningNow: draft.happeningNow as Answer, anyoneInjured: draft.anyoneInjured as Answer } : {}),
-      additionalDetails: draft.additionalDetails.trim() || undefined,
-      location: { latitude: Number(draft.latitude), longitude: Number(draft.longitude) },
-      status: 'Unverified', history: [{ status: 'Unverified', at: now }],
-    }
-    const next = [report, ...reports]
-    setReports(next)
-    saveReports(next)
-    setSubmittedId(id)
-    navigate('confirmation')
-  }
-
-  function changeStatus(id: string, status: Status, reason: string) {
-    const next = reports.map((report) => report.id === id ? {
-      ...report, status, history: [...report.history, { status, at: new Date().toISOString(), reason: reason.trim() || undefined }],
-    } : report)
-    setReports(next)
-    saveReports(next)
+    if (!session) { navigate('auth'); return }
+    setSubmitting(true); setSubmitError('')
+    try {
+      const result = await submitReportingChannels(draft, submissionRequestId)
+      await refreshConnectedData(session.user.id)
+      setSubmittedId([result.reportId, result.postId].filter(Boolean).join(' / '))
+      navigate('confirmation')
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : 'The report could not be submitted. Your entries are still here; please retry.')
+    } finally { setSubmitting(false) }
   }
 
   async function changeStatusConnected(id: string, status: Status, reason: string) {
@@ -213,9 +182,7 @@ function App() {
     await refreshConnectedData()
   }
 
-  function switchMode(mode: AppMode) {
-    setAppMode(mode); setScreen('home'); setSelectedId(''); setMenuOpen(false); setDataError('')
-  }
+  if (!isSupabaseConfigured) return <ServiceUnavailable />
 
   return (
     <div className="app-shell">
@@ -224,40 +191,39 @@ function App() {
           <span className="brand-mark"><ShieldAlert size={25} /></span>
           <span>AlertBridge</span>
         </button>
-        <div className="mode-switch" aria-label="Storage mode">
-          <button className={appMode === 'demo' ? 'active' : ''} onClick={() => switchMode('demo')}>Demo mode</button>
-          <button className={appMode === 'connected' ? 'active' : ''} onClick={() => isSupabaseConfigured && switchMode('connected')} disabled={!isSupabaseConfigured}>Connected</button>
-        </div>
         <button className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen} aria-label="Open navigation"><Menu /></button>
         <nav className={menuOpen ? 'nav open' : 'nav'} aria-label="Main navigation">
           <button className={screen === 'home' ? 'active' : ''} onClick={() => navigate('home')}><HomeIcon size={18} /> Home</button>
           <button className={screen === 'alerts' ? 'active' : ''} onClick={() => navigate('alerts')}><Megaphone size={18} /> Community alerts</button>
           <button onClick={startReport}><AlertTriangle size={18} /> Report incident</button>
-          <button className={screen === 'dashboard' || screen === 'detail' ? 'active' : ''} onClick={() => appMode === 'connected' && !session ? navigate('auth') : navigate('dashboard')}><ClipboardList size={18} /> {appMode === 'demo' ? 'Responder demo' : isResponder ? 'Responder dashboard' : 'My reports'}</button>
-          {appMode === 'connected' && !authLoading && (session
+          <button className={screen === 'dashboard' || screen === 'detail' ? 'active' : ''} onClick={() => !session ? navigate('auth') : navigate('dashboard')}><ClipboardList size={18} /> {isResponder ? 'Responder dashboard' : 'My reports'}</button>
+          {!authLoading && (session
             ? <><button onClick={() => navigate('account')}><UserRound size={18} /> Account</button><button onClick={() => void supabase?.auth.signOut()}><LogOut size={18} /> Sign out</button></>
             : <button onClick={() => navigate('auth')}><LogIn size={18} /> Sign in</button>)}
         </nav>
       </header>
 
       <main>
-        {!isSupabaseConfigured && <div className="config-notice" role="note"><b>Demo mode</b><span>Connected mode is unavailable until the public Supabase environment variables are configured. Local demo reports still work.</span></div>}
-        {screen === 'home' && <Home startReport={startReport} openDashboard={() => navigate('dashboard')} reportCount={activeReports.length} connected={appMode === 'connected'} />}
+        {screen === 'home' && <Home startReport={startReport} openDashboard={() => session ? navigate('dashboard') : navigate('auth')} reportCount={connectedReports.length} signedIn={Boolean(session)} />}
         {screen === 'alerts' && <CommunityAlertsFeed session={session} isResponder={isResponder} />}
         {screen === 'auth' && <AuthPanel back={() => navigate('home')} recovery={passwordRecovery} />}
         {screen === 'account' && session && <AccountPanel session={session} back={() => navigate('home')} onSaved={(name) => updateDisplayName(session.user.id, name)} />}
-        {screen === 'report' && <ReportForm connected={appMode === 'connected'} draft={draft} errors={errors} update={updateDraft} useLocation={useLocation} locating={locating} geoMessage={geoMessage} usePublicLocation={usePublicLocation} publicLocating={publicLocating} publicGeoMessage={publicGeoMessage} cancel={() => navigate('home')} review={() => validateDraft() && navigate('review')} />}
-        {screen === 'review' && <Review connected={appMode === 'connected'} submitting={submitting} submitError={submitError} draft={draft as Draft & { mode: Mode; category: Category }} edit={() => navigate('report')} submit={submitReport} />}
-        {screen === 'confirmation' && <Confirmation connected={appMode === 'connected'} id={submittedId} another={startReport} dashboard={() => navigate('dashboard')} />}
-        {screen === 'dashboard' && <Dashboard connected={appMode === 'connected'} responder={isResponder} loading={dataLoading} error={dataError} reports={activeReports} open={(id) => { setSelectedId(id); navigate('detail') }} refresh={() => appMode === 'connected' ? void refreshConnectedData() : setReports(loadReports())} openAlerts={() => navigate('alerts')} />}
-        {screen === 'detail' && selectedReport && <ReportDetail connected={appMode === 'connected'} canUpdate={appMode === 'demo' || isResponder} report={selectedReport} back={() => navigate('dashboard')} updateStatus={appMode === 'demo' ? changeStatus : changeStatusConnected} />}
+        {screen === 'report' && <ReportForm draft={draft} errors={errors} update={updateDraft} useLocation={useLocation} locating={locating} geoMessage={geoMessage} usePublicLocation={usePublicLocation} publicLocating={publicLocating} publicGeoMessage={publicGeoMessage} cancel={() => navigate('home')} review={() => validateDraft() && navigate('review')} />}
+        {screen === 'review' && <Review submitting={submitting} submitError={submitError} draft={draft as Draft & { mode: Mode; category: Category }} edit={() => navigate('report')} submit={submitReport} />}
+        {screen === 'confirmation' && <Confirmation id={submittedId} another={startReport} dashboard={() => navigate('dashboard')} />}
+        {screen === 'dashboard' && session && <Dashboard responder={isResponder} loading={dataLoading} error={dataError} reports={connectedReports} open={(id) => { setSelectedId(id); navigate('detail') }} refresh={() => void refreshConnectedData()} openAlerts={() => navigate('alerts')} />}
+        {screen === 'detail' && session && selectedReport && <ReportDetail canUpdate={isResponder} report={selectedReport} back={() => navigate('dashboard')} updateStatus={changeStatusConnected} />}
       </main>
-      <footer><span className="footer-brand"><ShieldAlert size={18} /> AlertBridge</span><span>{appMode === 'demo' ? 'Demo mode · Reports stay in this browser' : 'Connected to AlertBridge storage · Emergency services are not connected'}</span></footer>
+      <footer><span className="footer-brand"><ShieldAlert size={18} /> AlertBridge</span><span>Reports are stored in AlertBridge · Emergency services are not connected</span></footer>
     </div>
   )
 }
 
-function Home({ startReport, openDashboard, reportCount, connected }: { startReport: () => void; openDashboard: () => void; reportCount: number; connected: boolean }) {
+function ServiceUnavailable() {
+  return <div className="app-shell"><header className="site-header"><div className="brand"><span className="brand-mark"><ShieldAlert size={25} /></span><span>AlertBridge</span></div></header><main><section className="page narrow"><div className="auth-card"><span className="mini-label">SERVICE UNAVAILABLE</span><h1>AlertBridge cannot connect.</h1><p>The required service configuration is missing. Reporting, accounts and community alerts are unavailable until the service is configured.</p><div className="submission-notice" role="note"><AlertTriangle /><span>Emergency services are not connected. Do not rely on AlertBridge to contact or dispatch help.</span></div></div></section></main></div>
+}
+
+function Home({ startReport, openDashboard, reportCount, signedIn }: { startReport: () => void; openDashboard: () => void; reportCount: number; signedIn: boolean }) {
   return <>
     <section className="hero">
       <div className="hero-copy">
@@ -279,14 +245,14 @@ function Home({ startReport, openDashboard, reportCount, connected }: { startRep
       <div className="steps">
         <article><span className="step-number">01</span><FileText /><h3>Tell us what happened</h3><p>Answer simple questions or write it in your own words.</p></article>
         <article><span className="step-number">02</span><MapPin /><h3>Add the location</h3><p>Use your location only when the incident is where you are, or enter coordinates.</p></article>
-        <article><span className="step-number">03</span><CheckCircle2 /><h3>Review and save</h3><p>Check every detail. Demo reports remain in this browser.</p></article>
+        <article><span className="step-number">03</span><CheckCircle2 /><h3>Review and submit</h3><p>Check every detail before submitting it to AlertBridge.</p></article>
       </div>
     </section>
-    <section className="responder-callout"><div><span className="mini-label">{connected ? 'YOUR CONNECTED REPORTS' : 'SIMULATED RESPONDER VIEW'}</span><h2>{connected ? 'Review your submitted reports' : 'See how reports are reviewed'}</h2><p>{connected ? 'Signed-in users see only their own reports unless an administrator has authorised responder access.' : 'This demonstration has no real access control and does not connect to an agency.'}</p></div><button className="secondary" onClick={openDashboard}><ClipboardList /> {connected ? 'Open reports' : 'Open dashboard'} {reportCount > 0 && <span className="count">{reportCount}</span>}</button></section>
+    <section className="responder-callout"><div><span className="mini-label">{signedIn ? 'YOUR ALERTBRIDGE REPORTS' : 'ACCOUNT REQUIRED'}</span><h2>{signedIn ? 'Review your submitted reports' : 'Sign in to submit reports'}</h2><p>{signedIn ? 'You see only your own reports unless an administrator has authorised responder access.' : 'Community Alerts remain public, but posting warnings and requesting assistance require an account.'}</p></div><button className="secondary" onClick={openDashboard}><ClipboardList /> {signedIn ? 'Open reports' : 'Sign in'} {reportCount > 0 && <span className="count">{reportCount}</span>}</button></section>
   </>
 }
 
-function ReportForm({ connected, draft, errors, update, useLocation, locating, geoMessage, usePublicLocation, publicLocating, publicGeoMessage, cancel, review }: { connected: boolean; draft: Draft; errors: Record<string, string>; update: (f: keyof Draft, v: string) => void; useLocation: () => void; locating: boolean; geoMessage: string; usePublicLocation: () => void; publicLocating: boolean; publicGeoMessage: string; cancel: () => void; review: () => void }) {
+function ReportForm({ draft, errors, update, useLocation, locating, geoMessage, usePublicLocation, publicLocating, publicGeoMessage, cancel, review }: { draft: Draft; errors: Record<string, string>; update: (f: keyof Draft, v: string) => void; useLocation: () => void; locating: boolean; geoMessage: string; usePublicLocation: () => void; publicLocating: boolean; publicGeoMessage: string; cancel: () => void; review: () => void }) {
   const [privateElsewhere, setPrivateElsewhere] = useState(false)
   const [publicElsewhere, setPublicElsewhere] = useState(false)
   const [summaryMessage, setSummaryMessage] = useState('')
@@ -294,11 +260,11 @@ function ReportForm({ connected, draft, errors, update, useLocation, locating, g
     <button className="back-link" onClick={cancel}><ArrowLeft /> Back to home</button>
     <div className="page-heading"><span className="mini-label">NEW INCIDENT REPORT</span><h1>What would you like to report?</h1><p>Choose the way that feels easiest. Required fields are marked <b>*</b>.</p></div>
     <div className="form-card">
-      {connected && <fieldset><legend>Who should receive this information? <b>*</b></legend><div className="choice-grid channels">
+      <fieldset><legend>Who should receive this information? <b>*</b></legend><div className="choice-grid channels">
         <Choice selected={draft.reportingChannel === 'community'} onClick={() => update('reportingChannel', 'community')} icon={Megaphone} title="Warn the community" note="Publish an unverified warning for public viewing" />
         <Choice selected={draft.reportingChannel === 'assistance'} onClick={() => update('reportingChannel', 'assistance')} icon={ShieldAlert} title="Request emergency assistance" note="Send a private request to authorised responders" />
         <Choice selected={draft.reportingChannel === 'both'} onClick={() => update('reportingChannel', 'both')} icon={AlertTriangle} title="Both" note="Create linked public and private records safely" />
-      </div></fieldset>}
+      </div></fieldset>
       <fieldset className={errors.mode ? 'has-error' : ''}><legend>How do you want to report? <b>*</b></legend><div className="choice-grid two">
         <Choice selected={draft.mode === 'guided'} onClick={() => update('mode', 'guided')} icon={ClipboardList} title="Guided questions" note="We’ll ask one clear question at a time" />
         <Choice selected={draft.mode === 'written'} onClick={() => update('mode', 'written')} icon={FileText} title="Write a report" note="Describe the incident in your own words" />
@@ -318,7 +284,7 @@ function ReportForm({ connected, draft, errors, update, useLocation, locating, g
           <AnswerField title="Is it happening now?" value={draft.happeningNow} error={errors.happeningNow} onChange={(v) => update('happeningNow', v)} />
           <AnswerField title="Is anyone injured?" value={draft.anyoneInjured} error={errors.anyoneInjured} onChange={(v) => update('anyoneInjured', v)} />
         </div>}
-        {(!connected || draft.reportingChannel !== 'community') && <div className="location-section">
+        {draft.reportingChannel !== 'community' && <div className="location-section">
           <div className="location-title"><span className="icon-box"><MapPin /></span><div><h2>Private assistance location <b>*</b></h2><p>This location is stored with the private assistance report and is not automatically copied to the public warning.</p></div></div>
           <p className="location-explanation"><b>Use this if the incident is happening where you are.</b> Your browser will ask for location permission.</p>
           <button type="button" className="primary location-primary" onClick={useLocation} disabled={locating}><LocateFixed /> {locating ? 'Finding your location…' : draft.latitude && draft.longitude ? 'Use my current location again' : 'Use my current location'}</button>
@@ -329,7 +295,7 @@ function ReportForm({ connected, draft, errors, update, useLocation, locating, g
           <details className="advanced-location"><summary>Advanced: enter coordinates manually</summary><div className="coordinate-grid"><label>Latitude <b>*</b><input inputMode="decimal" value={draft.latitude} onChange={(e) => update('latitude', e.target.value)} placeholder="e.g. 6.5244" aria-invalid={!!errors.latitude} />{errors.latitude && <ErrorText text={errors.latitude} />}</label><label>Longitude <b>*</b><input inputMode="decimal" value={draft.longitude} onChange={(e) => update('longitude', e.target.value)} placeholder="e.g. 3.3792" aria-invalid={!!errors.longitude} />{errors.longitude && <ErrorText text={errors.longitude} />}</label></div></details>
         </div>}
         {draft.mode === 'guided' && <div className="field-section"><label htmlFor="details">Additional details <span>(optional)</span></label><textarea id="details" rows={3} value={draft.additionalDetails} onChange={(e) => update('additionalDetails', e.target.value)} placeholder="Anything else that may help…" /></div>}
-        {connected && draft.reportingChannel !== 'assistance' && <section className="public-fields" aria-labelledby="public-fields-title"><h2 id="public-fields-title"><Megaphone /> Public community warning</h2><p><b>These fields will be public:</b> area name, category, public summary, incident coordinates, radius and expiry. Your email, private description, questionnaire answers and additional details will not be published automatically.</p>
+        {draft.reportingChannel !== 'assistance' && <section className="public-fields" aria-labelledby="public-fields-title"><h2 id="public-fields-title"><Megaphone /> Public community warning</h2><p><b>These fields will be public:</b> area name, category, public summary, incident coordinates, radius and expiry. Your email, private description, questionnaire answers and additional details will not be published automatically.</p>
           <div className="coordinate-grid"><label>Affected area name <b>*</b><input value={draft.publicArea} onChange={(event) => update('publicArea', event.target.value)} aria-invalid={!!errors.publicArea} />{errors.publicArea && <ErrorText text={errors.publicArea} />}</label><label>Expiry time <b>*</b><input type="datetime-local" value={draft.publicExpiry} onChange={(event) => update('publicExpiry', event.target.value)} aria-invalid={!!errors.publicExpiry} />{errors.publicExpiry && <ErrorText text={errors.publicExpiry} />}</label></div>
           <div className="field-section"><label htmlFor="public-summary">Public summary <b>*</b></label>{draft.mode === 'guided' ? <><p className="field-help">Generate plain-language wording from the category, affected area and selected Yes/No/Not sure answers. Private descriptions and additional details are never included. You can edit the result; later answer changes will not overwrite your edits.</p><button type="button" className="secondary summary-generator" onClick={() => { const generated = generatePublicSummary({ category: draft.category, affectedArea: draft.publicArea, happeningNow: draft.happeningNow, anyoneInjured: draft.anyoneInjured }); update('publicSummary', generated); setSummaryMessage(draft.publicSummary ? 'Summary regenerated from the current selected answers. Your previous summary was replaced because you selected Regenerate.' : 'Summary generated. Review and edit it before submission.') }}><FileText /> {draft.publicSummary ? 'Regenerate from current answers' : 'Generate from selected answers'}</button>{summaryMessage && <p className="geo-message" role="status">{summaryMessage}</p>}</> : <p className="field-help">Write a short public summary directly. Include only information you want everyone to see.</p>}<textarea id="public-summary" rows={4} value={draft.publicSummary} onChange={(event) => { update('publicSummary', event.target.value); setSummaryMessage('Public summary edited. It will not be changed unless you select Regenerate.') }} aria-invalid={!!errors.publicSummary} placeholder={draft.mode === 'guided' ? 'Generate a summary, then review or edit it here.' : 'Write only information that is appropriate to share publicly.'} />{errors.publicSummary && <ErrorText text={errors.publicSummary} />}</div>
           <div className="location-warning"><AlertTriangle /><span><b>The selected incident location and danger radius will be public.</b> AlertBridge never copies the private assistance location automatically.</span></div>
@@ -356,43 +322,43 @@ function AnswerField({ title, value, error, onChange }: { title: string; value: 
   return <fieldset className={error ? 'answer-field has-error' : 'answer-field'}><legend>{title} <b>*</b></legend><div className="answer-buttons">{answers.map((answer) => <button type="button" key={answer} className={value === answer ? 'selected' : ''} onClick={() => onChange(answer)} aria-pressed={value === answer}>{answer}</button>)}</div>{error && <ErrorText text={error} />}</fieldset>
 }
 
-function Review({ connected, submitting, submitError, draft, edit, submit }: { connected: boolean; submitting: boolean; submitError: string; draft: Draft & { mode: Mode; category: Category }; edit: () => void; submit: () => void | Promise<void> }) {
+function Review({ submitting, submitError, draft, edit, submit }: { submitting: boolean; submitError: string; draft: Draft & { mode: Mode; category: Category }; edit: () => void; submit: () => void | Promise<void> }) {
   return <section className="page narrow"><button className="back-link" onClick={edit}><ArrowLeft /> Edit report</button><div className="page-heading"><span className="mini-label">FINAL CHECK</span><h1>Review your report</h1><p>Make sure these details are correct before submission.</p></div>
     <div className="review-card"><div className="review-header"><span className="category-icon">{draft.category}</span><span className="status-pill unverified">Unverified</span></div>
-      {connected && <ReviewRow label="Reporting channel" value={draft.reportingChannel === 'both' ? 'Public community warning and private assistance request' : draft.reportingChannel === 'community' ? 'Public community warning' : 'Private emergency assistance request'} />}
+      <ReviewRow label="Reporting channel" value={draft.reportingChannel === 'both' ? 'Public community warning and private assistance request' : draft.reportingChannel === 'community' ? 'Public community warning' : 'Private emergency assistance request'} />
       <ReviewRow label="Reporting method" value={draft.mode === 'guided' ? 'Guided questions' : 'Written report'} />
       <ReviewRow label="What is happening" value={draft.description} />
       {draft.mode === 'guided' && <><ReviewRow label="Happening now" value={draft.happeningNow} /><ReviewRow label="Anyone injured" value={draft.anyoneInjured} /></>}
       {draft.additionalDetails && <ReviewRow label="Additional details" value={draft.additionalDetails} />}
-      {(!connected || draft.reportingChannel !== 'community') && <ReviewRow label="Private assistance location" value={`${Number(draft.latitude).toFixed(6)}, ${Number(draft.longitude).toFixed(6)}`} />}
-      {connected && draft.reportingChannel !== 'assistance' && <><ReviewRow label="Public affected area" value={draft.publicArea} /><ReviewRow label="Public summary" value={draft.publicSummary} /><ReviewRow label="Public danger-zone location" value={`${Number(draft.publicLatitude).toFixed(6)}, ${Number(draft.publicLongitude).toFixed(6)}`} /><ReviewRow label="Public expiry" value={formatDate(new Date(draft.publicExpiry).toISOString())} /><ReviewRow label="Public radius" value={`${draft.publicRadiusKm} km`} /></>}
+      {draft.reportingChannel !== 'community' && <ReviewRow label="Private assistance location" value={`${Number(draft.latitude).toFixed(6)}, ${Number(draft.longitude).toFixed(6)}`} />}
+      {draft.reportingChannel !== 'assistance' && <><ReviewRow label="Public affected area" value={draft.publicArea} /><ReviewRow label="Public summary" value={draft.publicSummary} /><ReviewRow label="Public danger-zone location" value={`${Number(draft.publicLatitude).toFixed(6)}, ${Number(draft.publicLongitude).toFixed(6)}`} /><ReviewRow label="Public expiry" value={formatDate(new Date(draft.publicExpiry).toISOString())} /><ReviewRow label="Public radius" value={`${draft.publicRadiusKm} km`} /></>}
     </div>
-    <div className="submission-notice" role="note"><AlertTriangle /><span>{connected ? draft.reportingChannel === 'community' ? 'This warning will be public and labelled “Community report — unverified”. It is not sent to emergency services.' : draft.reportingChannel === 'both' ? 'The public warning and private assistance request will be created together. Emergency services are not automatically contacted.' : 'This is a private assistance request stored in AlertBridge. Emergency services are not automatically contacted.' : 'Demo reports are saved only in this browser.'}</span></div>
+    <div className="submission-notice" role="note"><AlertTriangle /><span>{draft.reportingChannel === 'community' ? 'This warning will be public and labelled “Community report — unverified”. It is not sent to emergency services.' : draft.reportingChannel === 'both' ? 'The public warning and private assistance request will be created together. Emergency services are not automatically contacted.' : 'This is a private assistance request stored in AlertBridge. Emergency services are not automatically contacted.'}</span></div>
     {submitError && <p className="submission-error" role="alert"><XCircle /> {submitError} Your entries have been preserved.</p>}
-    <div className="form-actions"><button className="secondary" onClick={edit} disabled={submitting}>Edit details</button><button className="primary" onClick={submit} disabled={submitting}><Check /> {submitting ? 'Submitting…' : connected ? 'Submit to AlertBridge' : 'Save demo report'}</button></div>
+    <div className="form-actions"><button className="secondary" onClick={edit} disabled={submitting}>Edit details</button><button className="primary" onClick={submit} disabled={submitting}><Check /> {submitting ? 'Submitting…' : 'Submit to AlertBridge'}</button></div>
   </section>
 }
 function ReviewRow({ label, value }: { label: string; value: string }) { return <div className="review-row"><span>{label}</span><p>{value}</p></div> }
 
-function Confirmation({ connected, id, another, dashboard }: { connected: boolean; id: string; another: () => void; dashboard: () => void }) {
-  return <section className="page confirmation"><div className="success-icon"><Check /></div><span className="mini-label">{connected ? 'SUBMITTED TO ALERTBRIDGE' : 'SAVED IN THIS DEMO'}</span><h1>Your report has been {connected ? 'submitted' : 'saved'}.</h1><p className="lead">{connected ? 'AlertBridge storage accepted the report. Emergency services have not been notified.' : 'It is stored only in this browser and has not been delivered to an emergency service.'}</p><div className="id-card"><span>REPORT ID</span><strong>{id}</strong><small>New reports begin as <b>Unverified</b>.</small></div><div className="confirmation-actions"><button className="primary" onClick={another}><AlertTriangle /> Report another incident</button><button className="secondary" onClick={dashboard}><ClipboardList /> {connected ? 'View my reports' : 'View responder demo'}</button></div></section>
+function Confirmation({ id, another, dashboard }: { id: string; another: () => void; dashboard: () => void }) {
+  return <section className="page confirmation"><div className="success-icon"><Check /></div><span className="mini-label">SUBMITTED TO ALERTBRIDGE</span><h1>Your report has been submitted.</h1><p className="lead">AlertBridge storage accepted the report. Emergency services have not been notified.</p><div className="id-card"><span>REPORT ID</span><strong>{id}</strong><small>New reports begin as <b>Unverified</b>.</small></div><div className="confirmation-actions"><button className="primary" onClick={another}><AlertTriangle /> Report another incident</button><button className="secondary" onClick={dashboard}><ClipboardList /> View my reports</button></div></section>
 }
 
-function Dashboard({ connected, responder, loading, error, reports, open, refresh, openAlerts }: { connected: boolean; responder: boolean; loading: boolean; error: string; reports: Report[]; open: (id: string) => void; refresh: () => void; openAlerts: () => void }) {
+function Dashboard({ responder, loading, error, reports, open, refresh, openAlerts }: { responder: boolean; loading: boolean; error: string; reports: Report[]; open: (id: string) => void; refresh: () => void; openAlerts: () => void }) {
   const counts = useMemo(() => ({ all: reports.length, unverified: reports.filter((r) => r.status === 'Unverified').length, active: reports.filter((r) => ['Under review', 'Verified'].includes(r.status)).length }), [reports])
-  return <section className="page dashboard-page"><div className="dashboard-banner"><ShieldAlert /><div><b>{connected ? responder ? 'Authorised responder dashboard' : 'Your connected reports' : 'Simulated responder dashboard'}</b><span>{connected ? responder ? 'Access is enforced by database membership and row-level security. No emergency agency connection is claimed.' : 'Only reports submitted by your account are visible. This is not an emergency service.' : 'This demo has no real access control and is not connected to any agency.'}</span></div></div>
-    <div className="dashboard-heading"><div><span className="mini-label">REPORT OVERVIEW</span><h1>{connected && responder ? 'Incident reports' : 'Community reports'}</h1><p>{connected ? responder ? 'Authorised reports loaded from AlertBridge storage for responder review.' : 'Reports submitted by your account and loaded from AlertBridge storage.' : 'Demo reports saved only in this browser.'}</p></div><button className="primary" onClick={refresh}><RefreshCw /> Refresh list</button></div>
-    {connected && responder && <div className="responder-public-tools"><div><b>Public community-post moderation</b><span>Open Community Alerts to find community posts, review their public content, and use responder-only verification or removal actions.</span></div><button className="secondary" onClick={openAlerts}><Megaphone /> Review public posts</button></div>}
+  return <section className="page dashboard-page"><div className="dashboard-banner"><ShieldAlert /><div><b>{responder ? 'Authorised responder dashboard' : 'Your reports'}</b><span>{responder ? 'Access is enforced by database membership and row-level security. No emergency agency connection is claimed.' : 'Only reports submitted by your account are visible. This is not an emergency service.'}</span></div></div>
+    <div className="dashboard-heading"><div><span className="mini-label">REPORT OVERVIEW</span><h1>{responder ? 'Incident reports' : 'Community reports'}</h1><p>{responder ? 'Authorised reports loaded from AlertBridge storage for responder review.' : 'Reports submitted by your account and loaded from AlertBridge storage.'}</p></div><button className="primary" onClick={refresh}><RefreshCw /> Refresh list</button></div>
+    {responder && <div className="responder-public-tools"><div><b>Public community-post moderation</b><span>Open Community Alerts to find community posts, review their public content, and use responder-only verification or removal actions.</span></div><button className="secondary" onClick={openAlerts}><Megaphone /> Review public posts</button></div>}
     <div className="metrics"><div><span>All reports</span><strong>{counts.all}</strong></div><div><span>Needs review</span><strong>{counts.unverified}</strong></div><div><span>Active review</span><strong>{counts.active}</strong></div></div>
     {error && <p className="submission-error" role="alert"><XCircle /> {error}</p>}
-    {loading ? <div className="empty-state"><ClipboardList /><h2>Loading reports…</h2></div> : reports.length === 0 ? <div className="empty-state"><ClipboardList /><h2>No {connected ? 'connected' : 'demo'} reports yet</h2><p>Reports {connected ? 'submitted by this account' : 'saved through this prototype'} will appear here.</p></div> : <div className="report-list" role="list">
+    {loading ? <div className="empty-state"><ClipboardList /><h2>Loading reports…</h2></div> : reports.length === 0 ? <div className="empty-state"><ClipboardList /><h2>No reports yet</h2><p>Reports submitted through AlertBridge will appear here.</p></div> : <div className="report-list" role="list">
       {reports.map((report) => <button key={report.id} className="report-item" onClick={() => open(report.id)} role="listitem"><span className="report-category-icon"><CategoryIcon category={report.category} /></span><span className="report-main"><b>{report.category}</b><small>{formatDate(report.createdAt)}</small><span><MapPin /> {shortLocation(report)}</span></span><span className={`status-pill ${report.status.toLowerCase().replace(' ', '-')}`}>{report.status}</span><ChevronRight className="chevron" /></button>)}
     </div>}
-    <p className="privacy-note"><ShieldAlert /> {connected ? responder ? 'Precise incident locations are restricted to authorised responder tools and are never exposed in the public feed.' : 'Your precise incident locations remain private and are never exposed in the public feed.' : 'Precise locations are shown only in this simulated responder view, never in a public feed.'}</p>
+    <p className="privacy-note"><ShieldAlert /> {responder ? 'Precise incident locations are restricted to authorised responder tools and are never exposed in the public feed.' : 'Your precise incident locations remain private and are never exposed in the public feed.'}</p>
   </section>
 }
 
-function ReportDetail({ connected, canUpdate, report, back, updateStatus }: { connected: boolean; canUpdate: boolean; report: Report; back: () => void; updateStatus: (id: string, s: Status, r: string) => void | Promise<void> }) {
+function ReportDetail({ canUpdate, report, back, updateStatus }: { canUpdate: boolean; report: Report; back: () => void; updateStatus: (id: string, s: Status, r: string) => void | Promise<void> }) {
   const [pending, setPending] = useState<Status | ''>('')
   const [reason, setReason] = useState('')
   const [error, setError] = useState('')
@@ -408,11 +374,11 @@ function ReportDetail({ connected, canUpdate, report, back, updateStatus }: { co
   }
   return <section className="page detail-page"><button className="back-link" onClick={back}><ArrowLeft /> All reports</button><div className="detail-heading"><div><span className="mini-label">REPORT {report.id}</span><h1>{report.category}</h1><p>Received {formatDate(report.createdAt)}</p></div><span className={`status-pill large ${report.status.toLowerCase().replace(' ', '-')}`}>{report.status}</span></div>
     <div className="detail-layout"><div className="detail-card"><h2>Incident details</h2><ReviewRow label="Description" value={report.description} />{report.happeningNow && <ReviewRow label="Happening now" value={report.happeningNow} />}{report.anyoneInjured && <ReviewRow label="Anyone injured" value={report.anyoneInjured} />}{report.additionalDetails && <ReviewRow label="Additional details" value={report.additionalDetails} />}<ReviewRow label="Precise incident location" value={shortLocation(report)} /><div className="privacy-inline"><ShieldAlert /> Keep precise location information inside authorized responder tools.</div></div>
-      {canUpdate ? <aside className="status-card"><h2>Update status</h2><p>{connected ? 'Connected changes use a transactional database function and are recorded in history.' : 'This changes only the locally saved demo.'}</p><div className="status-actions">{statuses.map((status) => <button key={status} className={pending === status ? 'selected' : ''} onClick={() => { setPending(status); setError('') }} aria-pressed={pending === status}>{status === 'Rejected' ? <X /> : <Check />} {status}</button>)}</div>{pending && <><label htmlFor="reason">Reason {(pending === 'Verified' || pending === 'Rejected') && <b>*</b>}</label><textarea id="reason" rows={3} value={reason} onChange={(e) => { setReason(e.target.value); setError('') }} placeholder={`Reason for ${pending.toLowerCase()}…`} />{error && <ErrorText text={error} />}<button className="primary full" onClick={apply} disabled={saving}>{saving ? 'Saving…' : 'Save status change'}</button></>}</aside> : <aside className="status-card"><h2>Status is read-only</h2><p>Your account can view this report and its history, but only authorised responders can change verification status.</p></aside>}
+      {canUpdate ? <aside className="status-card"><h2>Update status</h2><p>Changes use a transactional database function and are recorded in history.</p><div className="status-actions">{statuses.map((status) => <button key={status} className={pending === status ? 'selected' : ''} onClick={() => { setPending(status); setError('') }} aria-pressed={pending === status}>{status === 'Rejected' ? <X /> : <Check />} {status}</button>)}</div>{pending && <><label htmlFor="reason">Reason {(pending === 'Verified' || pending === 'Rejected') && <b>*</b>}</label><textarea id="reason" rows={3} value={reason} onChange={(e) => { setReason(e.target.value); setError('') }} placeholder={`Reason for ${pending.toLowerCase()}…`} />{error && <ErrorText text={error} />}<button className="primary full" onClick={apply} disabled={saving}>{saving ? 'Saving…' : 'Save status change'}</button></>}</aside> : <aside className="status-card"><h2>Status is read-only</h2><p>Your account can view this report and its history, but only authorised responders can change verification status.</p></aside>}
     </div>
     <div className="history-card"><h2>Status history</h2><ol>{[...report.history].reverse().map((event, index) => <li key={`${event.at}-${index}`}><span className="timeline-dot"></span><div><b>{event.status}</b><time>{formatDate(event.at)}</time>{event.reason && <p>Reason: {event.reason}</p>}</div></li>)}</ol></div>
-    {connected && <AssistancePanel reportId={report.id} canRecord={canUpdate} />}
-    {connected && canUpdate && <AlertPublisher report={report} />}
+    <AssistancePanel reportId={report.id} canRecord={canUpdate} />
+    {canUpdate && <AlertPublisher report={report} />}
   </section>
 }
 

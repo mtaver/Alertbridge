@@ -1,7 +1,7 @@
 import { supabase } from './supabase'
 import type { AssistanceAction, Draft } from './types'
 
-function client() { if (!supabase) throw new Error('Connected mode is not configured.'); return supabase }
+function client() { if (!supabase) throw new Error('AlertBridge service is unavailable.'); return supabase }
 
 export interface ChannelSubmissionResult { reportId?: string; postId?: string; channel: Draft['reportingChannel'] }
 
