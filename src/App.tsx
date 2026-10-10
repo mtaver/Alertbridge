@@ -42,7 +42,7 @@ function shortLocation(report: Report) {
 }
 
 function App() {
-  const [screen, setScreen] = useState<Screen>('home')
+  const [screen, setScreen] = useState<Screen>(() => new URLSearchParams(window.location.search).get('screen') === 'alerts' ? 'alerts' : 'home')
   const [draft, setDraft] = useState<Draft>(blankDraft)
   const [submissionRequestId, setSubmissionRequestId] = useState(() => crypto.randomUUID())
   const [selectedId, setSelectedId] = useState<string>('')

@@ -13,3 +13,9 @@ dist/
 *.p12
 *.pfx
 credentials.json
+
+.vercel
+.env*
+!.env.example
+scripts/live-abuse-protection.mjs
+scripts/live-permissions.mjs

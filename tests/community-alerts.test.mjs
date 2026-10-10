@@ -93,6 +93,8 @@ test('public feed defaults to active alerts and separates activity from verifica
 })
 
 test('notification denial guidance is produced only by the opt-in action', () => {
-  assert.match(ui, /const \[notificationMessage, setNotificationMessage\] = useState\(''\)/)
-  assert.match(ui, /async function enableNotifications\(\)[\s\S]*Notification\.requestPermission\(\)[\s\S]*permission was not granted/)
+  const pushUi = readFileSync(new URL('../src/PushNotificationSettings.tsx', import.meta.url), 'utf8')
+  const pushClient = readFileSync(new URL('../src/pushNotifications.ts', import.meta.url), 'utf8')
+  assert.match(pushUi, /onClick=\{\(\) => void run\('enable'\)\}/)
+  assert.match(pushClient, /Notification\.requestPermission\(\)[\s\S]*permission was not granted/)
 })

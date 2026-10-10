@@ -1,0 +1,9 @@
+{
+  "name": "AlertBridge",
+  "short_name": "AlertBridge",
+  "id": "/",
+  "start_url": "/?screen=alerts",
+  "display": "standalone",
+  "background_color": "#f6f2e8",
+  "theme_color": "#184d3c"
+}

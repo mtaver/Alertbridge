@@ -69,6 +69,9 @@ Configure these environment-variable names in Vercel Project Settings:
 - `VITE_SUPABASE_URL` — required
 - `VITE_SUPABASE_ANON_KEY` — required; use only the public browser key, never a service-role key
 - `VITE_MAPBOX_ACCESS_TOKEN` — optional; place search remains unavailable when omitted
+- `VITE_WEB_PUSH_VAPID_PUBLIC_KEY` — public VAPID key; required only when Web Push is activated
+
+The Web Push delivery function also requires server-only Vercel variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, and `CRON_SECRET`. Never prefix the private key, service-role key, or cron secret with `VITE_`; doing so would expose it in browser JavaScript.
 
 Set the required Supabase variables for Production and any Preview environment where AlertBridge should work. Environment-variable changes require a new Vercel build.
 
@@ -106,6 +109,8 @@ Deployment does not connect AlertBridge to an emergency service or agency. Keep 
    5. `supabase/migrations/20261009000100_separate_public_danger_zone.sql`
    6. `supabase/migrations/20261009000200_abuse_protection.sql`
    7. `supabase/migrations/20261009000300_private_report_messaging.sql`
+   8. `supabase/migrations/20261009000400_web_push_notifications.sql`
+   9. `supabase/migrations/20261009000500_supabase_push_scheduler.sql`
 4. For a local Supabase stack, run `supabase start` followed by `supabase db reset`.
 5. For a hosted project, link it and preview before applying:
 
@@ -117,6 +122,60 @@ Deployment does not connect AlertBridge to an emergency service or agency. Keep 
 
 6. In **Authentication → URL Configuration**, set the Site URL for the deployed app and add every allowed redirect URL. For local development, include `http://localhost:5173` and `http://127.0.0.1:5173`. Add the exact production HTTPS origin before deployment. Sign-up verification and password reset both redirect to the app origin.
 7. Keep email confirmation enabled if accounts must verify their address before receiving a session. Configure a production SMTP provider before relying on email delivery in production.
+
+## Web Push activation
+
+Web Push is implemented but is not active until the final migration, area catalog, VAPID keys, server secrets and queue schedule are configured. It uses an explicit browser button, a service worker, account-owned subscriptions, structured area IDs and a durable database queue. Notifications are queued only for active, unexpired responder-published alerts and responder-verified community posts. Removed, withdrawn, resolved and expired records are rechecked and cancelled before delivery. Private assistance reports and messages never enter the push queue.
+
+Production activation order:
+
+1. In **Supabase Dashboard → Database → Extensions**, enable **Vault**, **pg_net** and **pg_cron**. The scheduler migration also uses `create extension if not exists`, but enabling and checking them first makes setup failures explicit.
+2. Generate one VAPID key pair locally with `npx web-push generate-vapid-keys`. Do not paste the private key into chat or Git.
+3. In Vercel Project Settings, configure `VITE_WEB_PUSH_VAPID_PUBLIC_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, and `CRON_SECRET`. `VAPID_SUBJECT` should be a monitored `mailto:` address or HTTPS URL. The browser and server public keys must match. The private key, service-role key and cron secret must be server-only.
+4. Apply `20261009000400_web_push_notifications.sql` after the already-applied messaging migration.
+5. As a trusted administrator, seed stable area codes and names. Codes are identifiers and should not be renamed casually:
+
+   ```sql
+   insert into public.notification_areas (code, name)
+   values ('lagos-mainland', 'Lagos Mainland'), ('lagos-island', 'Lagos Island');
+   ```
+
+   Replace these examples with the actual operational areas. Responders must select one or more of these IDs when publishing an alert or verifying a community post; subscriber matching never uses free-text substrings.
+6. Store the full production worker URL and the same invocation secret in Supabase Vault. Replace the placeholders locally; never commit the values:
+
+   ```sql
+   select vault.create_secret(
+     'https://YOUR-VERCEL-DOMAIN/api/process-push-queue',
+     'alertbridge_push_worker_url',
+     'AlertBridge Web Push worker URL'
+   );
+   select vault.create_secret(
+     'THE_SAME_VALUE_AS_VERCEL_CRON_SECRET',
+     'alertbridge_push_worker_secret',
+     'AlertBridge Web Push worker invocation secret'
+   );
+   ```
+
+7. Apply `20261009000500_supabase_push_scheduler.sql`. It installs one statement-level queue-insert wake-up and one one-minute recovery job named `alertbridge-push-queue-recovery`.
+8. Deploy only after reviewing the environment scopes. Test with dedicated accounts and labelled alerts before enabling for real users.
+
+The database trigger asks the Vercel worker to drain the queue promptly after a queue-producing transaction. Supabase Cron invokes the same worker every minute to recover missed wake-ups and process due retries. Both calls use `pg_net`, so they are asynchronous. Missing Vault configuration, HTTP errors and wake-up enqueue failures are deliberately non-fatal and cannot roll back reporting or alert publication. The durable queue remains the source of truth.
+
+The worker claims at most 20 deliveries per batch, processes no more than three batches per invocation, sends at most ten concurrently, uses an eight-second provider timeout and has a 60-second Vercel duration bound. It finishes every batch it claims. If more work remains, it stays queued for another event wake-up or the next one-minute recovery run; stale processing locks are already recoverable by the queue RPC.
+
+To disable only the recurring recovery schedule while retaining event wake-ups:
+
+```sql
+select cron.unschedule(jobid)
+from cron.job
+where jobname = 'alertbridge-push-queue-recovery';
+```
+
+To pause all automatic delivery attempts, also disable the trigger through trusted administrative SQL. Do not delete queued rows; they can be processed after the trigger and schedule are restored.
+
+Vercel Hobby cannot run its own every-minute cron, so `vercel.json` intentionally contains no cron entry. Calls originating from Supabase are ordinary Vercel Function invocations. At current published allowances, Vercel Hobby includes up to one million Function invocations, while a one-minute recovery schedule produces about 43,200 calls in a 30-day month before event wake-ups. Supabase currently includes Cron/pg_net as database capabilities, and Supabase Free includes 500,000 Edge Function invocations, although this design does not require an Edge Function. Zero incremental cost is conditional on remaining within all current Vercel and Supabase allowances; limits and pricing can change, and Free services may pause or restrict service. AlertBridge does not promise continuous availability or guaranteed notification delivery.
+
+Web Push requires HTTPS (localhost is permitted for development), browser support, user permission, and an active browser-managed subscription. On iOS/iPadOS it requires a Home Screen web app. Delivery can be delayed or suppressed by the browser, operating system, connectivity, battery settings or user preferences and is never guaranteed. AlertBridge does not perform continuous background GPS checks, offline delivery, emergency-service contact or rescue dispatch.
 
 ## Assign the first responder
 
@@ -211,6 +270,7 @@ order by changed_at;
 - Public-alert live refresh through a metadata-only Supabase Realtime signal; reconnects refetch the safe public view
 - Opt-in foreground location monitoring with configurable approach distance, duplicate suppression and repeat warnings after material alert updates
 - Optional foreground browser notifications and destination-area coordinate checks
+- Opt-in background-capable Web Push for selected structured areas, with account-owned subscriptions and a retryable server-side queue
 - Reporting choices for a public community warning, a private assistance request, or an atomic linked submission containing both
 - Separate coordinates for private assistance and the public danger zone; device coordinates are published only after the reporter explicitly chooses the public-location control
 - Primary GPS location actions, optional place search, and advanced manual-coordinate disclosures for incident and destination selection
@@ -242,11 +302,13 @@ Realtime subscriptions listen only to metadata rows in `private_message_events`,
 
 ## Verification
 
-The current automated suite contains **73 passing tests**. `npm test` covers frontend validation, connected-only access boundaries, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, submission and message-limit contracts, retry counting, concurrency locks, suspension coverage, messaging privacy, immutable messages, scoped Realtime cleanup, unread behavior, restoration auditing, and unauthorised access, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
+The current automated suite contains **80 passing tests**. It covers frontend validation, connected-only access boundaries, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, submission and message-limit contracts, retry counting, concurrency locks, suspension coverage, messaging privacy, Web Push ownership/eligibility/retry/duplicate/unsubscribe contracts, Supabase event wake-up and recovery scheduling, immutable messages, scoped Realtime cleanup, unread behavior, restoration auditing, and unauthorised access, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
 
 User-observed checks confirmed that an authenticated account could publish a public community warning, an authorised responder could verify it, and removal caused it to disappear from another account's Community Alerts feed.
 
-GPS proximity warnings have been exercised with controlled coordinates in automated tests, but have **not yet been verified on a physical device**. Physical-device checks are still required for real GPS accuracy, permission behavior, foreground monitoring and browser notification behavior.
+GPS proximity warnings have been exercised with controlled coordinates in automated tests, but have **not yet been verified on a physical device**. Web Push also requires live verification on representative Android, desktop and iOS Home Screen installations. Physical-device checks are still required for real GPS accuracy, permission behavior, foreground monitoring, background delivery, unsubscribe propagation and browser/OS delivery behavior.
+
+Live end-to-end Web Push notification delivery is still unverified. A production check must confirm subscription creation, queue insertion, Supabase-triggered worker invocation, provider acceptance and receipt on representative devices without using a real emergency alert.
 
 Without a configured Supabase project, these checks do **not** prove live authentication email delivery, hosted redirect settings, applied RLS behaviour, or remote migration state. After creating a project, apply the migration and perform live tests with at least two ordinary users and one administrator-assigned responder.
 
@@ -257,7 +319,7 @@ The abuse-protection and private-messaging migrations have been applied, but com
 - No public incident map, route guidance, SMS fallback, or audio prompts
 - Private conversations do not support attachments or external SMS/email delivery
 - No offline transmission
-- Nearby monitoring and browser notifications are foreground-only and work only while the application is open; there is no Web Push, dependable background delivery or offline warning delivery yet
+- Nearby GPS monitoring remains foreground-only. Opt-in Web Push can deliver selected-area alerts without continuous GPS, but browser/OS delivery is not guaranteed and there is no offline reporting transmission
 - Destination checks cover the selected area only, not the journey, and do not provide route avoidance
 - Community warnings are unverified unless a responder explicitly verifies them; nearby warnings default to responder-verified information only
 - No agency messaging or rescue-dispatch integration exists; a recorded handoff is documentation, not transmission

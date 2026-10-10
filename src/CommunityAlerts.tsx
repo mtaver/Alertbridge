@@ -9,6 +9,8 @@ import { isSupabaseConfigured } from './supabase'
 import type { AlertDraft, Category, CommunityAlert, Report } from './types'
 import { PlaceSearch } from './PlaceSearch'
 import { displayedAlertGuidance } from './alertPresentation'
+import { PushNotificationSettings } from './PushNotificationSettings'
+import { fetchAlertNotificationAreas, fetchNotificationAreas, setAlertNotificationAreas, type NotificationArea } from './pushNotifications'
 
 const alertCategories: Array<Category | 'All'> = ['All', 'Security threat', 'Flood', 'Landslide', 'Fire', 'Other']
 
@@ -33,8 +35,6 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
   const [approachDistance, setApproachDistance] = useState(1)
   const [warningMatches, setWarningMatches] = useState<NearbyAlert[]>([])
   const [warningAnnouncement, setWarningAnnouncement] = useState('')
-  const [notificationOptIn, setNotificationOptIn] = useState(false)
-  const [notificationMessage, setNotificationMessage] = useState('')
   const [includeCommunityWarnings, setIncludeCommunityWarnings] = useState(false)
   const [destinationLatitude, setDestinationLatitude] = useState('')
   const [destinationLongitude, setDestinationLongitude] = useState('')
@@ -57,6 +57,10 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
     window.addEventListener('online', recover)
     return () => { window.removeEventListener('online', recover); void removePublicAlertSubscription(channel) }
   }, [])
+  useEffect(() => {
+    const targetAlert = new URLSearchParams(window.location.search).get('alert')
+    if (targetAlert && alerts.length) document.getElementById(`alert-${targetAlert}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [alerts])
 
   const filtered = useMemo(() => alerts.filter((alert) => {
     const active = alert.displayStatus === 'Published' && new Date(alert.expiresAt).getTime() > Date.now()
@@ -108,18 +112,10 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
     setWarningMatches(matches)
     const fresh = newWarningMatches(matches, warnedVersions.current)
     if (fresh.length) setWarningAnnouncement(`Reported danger nearby. Avoid the affected area and review guidance. ${fresh.map(({ alert }) => `${alert.category} in ${alert.affectedArea}, updated ${formatAlertDate(alert.updatedAt)}`).join('; ')}`)
-    fresh.forEach(({ alert, boundaryDistanceKm }) => {
+    fresh.forEach(({ alert }) => {
       warnedVersions.current.set(alert.id, alert.updatedAt)
-      if (notificationOptIn && Notification.permission === 'granted') new Notification('Reported danger nearby', { body: `${alert.category} in ${alert.affectedArea}, ${boundaryDistanceKm.toFixed(1)} km from the danger-zone boundary. Review responder guidance.` })
     })
-  }, [warningAlerts, warningLocation, warningsEnabled, approachDistance, notificationOptIn])
-
-  async function enableNotifications() {
-    if (!('Notification' in window)) { setNotificationMessage('Browser notifications are not supported here. In-app warnings remain available.'); return }
-    const permission = await Notification.requestPermission()
-    setNotificationOptIn(permission === 'granted')
-    setNotificationMessage(permission === 'granted' ? 'Browser notifications enabled while AlertBridge is open.' : 'Browser notification permission was not granted. In-app warnings remain available.')
-  }
+  }, [warningAlerts, warningLocation, warningsEnabled, approachDistance])
 
   function checkDestination() {
     const latitude = Number(destinationLatitude); const longitude = Number(destinationLongitude)
@@ -142,7 +138,7 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
     {loading ? <div className="empty-state"><Megaphone /><h2>Loading alerts…</h2></div> : filtered.length === 0 ? <div className="empty-state"><Megaphone /><h2>No alerts match these filters</h2><p>No active alert is currently available here. This does not mean the area is safe.{!showPastAlerts && ' Select “Show past alerts” to include expired and resolved items.'}</p></div> : <div className="alerts-grid">
       {filtered.map((alert) => {
         const activity = alert.displayStatus === 'Published' && new Date(alert.expiresAt).getTime() > Date.now() ? 'Active' : alert.displayStatus === 'Resolved' ? 'Resolved' : 'Expired'
-        return <article className={`alert-card ${activity.toLowerCase()} ${alert.sourceKind}`} key={alert.id}>
+        return <article id={`alert-${alert.id}`} className={`alert-card ${activity.toLowerCase()} ${alert.sourceKind}`} key={alert.id}>
         <div className="alert-card-top"><span className="alert-category">{alert.category}</span><span className={`alert-state ${activity.toLowerCase()}`}>{activity}</span></div>
         <span className={alert.verified ? 'source-label verified-source' : 'source-label unverified-source'}>{alert.verified ? 'Responder-verified' : 'Community report — unverified'}</span>
         <h2>{alert.title}</h2><p>{alert.summary}</p>
@@ -151,13 +147,12 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
         {alert.sourceKind === 'community_post' && <CommunityPostActions alert={alert} session={session} isResponder={isResponder} refreshed={() => void loadAlerts()} />}
       </article>})}
     </div>}
+    <PushNotificationSettings session={session} />
     <section className="warning-controls" aria-labelledby="nearby-warning-heading">
       <div><span className="mini-label">OPT-IN LOCATION</span><h2 id="nearby-warning-heading">Nearby danger warnings</h2><p>Check active danger zones near you. Your location stays on this device.</p><details className="warning-details"><summary>How nearby warnings work</summary><p>AlertBridge compares your location locally while this page is open. Warnings may be interrupted by lost connectivity. It does not reliably warn you when the app is closed or the phone is locked, and there is no offline or background delivery.</p></details></div>
       <label>Approach distance<select value={approachDistance} onChange={(event) => setApproachDistance(Number(event.target.value))}><option value={0}>Inside zone only</option><option value={0.5}>Within 0.5 km</option><option value={1}>Within 1 km</option><option value={2}>Within 2 km</option><option value={5}>Within 5 km</option></select></label>
       <label className="warning-source"><input type="checkbox" checked={includeCommunityWarnings} onChange={(event) => setIncludeCommunityWarnings(event.target.checked)} /> Include unverified community warnings</label>
       <button className={warningsEnabled ? 'danger-button' : 'primary'} onClick={() => setWarningsEnabled((enabled) => !enabled)}>{warningsEnabled ? <BellOff /> : <Bell />} {warningsEnabled ? 'Disable nearby warnings' : 'Enable nearby warnings'}</button>
-      <button className="secondary" onClick={() => void enableNotifications()} disabled={notificationOptIn}><Bell /> {notificationOptIn ? 'Browser notifications on' : 'Enable browser notifications'}</button>
-      {notificationMessage && <p className="control-message" role="status">{notificationMessage}</p>}
     </section>
     {warningAnnouncement && <p className="visually-hidden" role="alert">{warningAnnouncement}</p>}
     {warningsEnabled && warningMatches.length > 0 && <section className="nearby-warnings" aria-label="Nearby danger warnings"><h2><AlertTriangle /> Reported danger nearby. Avoid the affected area and review guidance.</h2>{warningMatches.map((match) => <WarningCard key={match.alert.id} match={match} />)}</section>}
@@ -171,19 +166,21 @@ function CommunityPostActions({ alert, session, isResponder, refreshed }: { aler
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
   const [flagCount, setFlagCount] = useState<number | null>(null)
-  useEffect(() => { if (isResponder) void fetchCommunityPostFlagCount(alert.id).then(setFlagCount).catch(() => setFlagCount(null)) }, [alert.id, isResponder])
+  const [notificationAreas, setNotificationAreas] = useState<NotificationArea[]>([])
+  const [selectedAreas, setSelectedAreas] = useState<string[]>([])
+  useEffect(() => { if (isResponder) { void fetchCommunityPostFlagCount(alert.id).then(setFlagCount).catch(() => setFlagCount(null)); void Promise.all([fetchNotificationAreas(), fetchAlertNotificationAreas('community_post', alert.id)]).then(([areas, selected]) => { setNotificationAreas(areas); setSelectedAreas(selected) }).catch(() => setMessage('Notification areas could not be loaded.')) } }, [alert.id, isResponder])
   async function act(action: 'Report' | 'Verified' | 'Removed') {
     if (!reason.trim()) { setMessage('Enter a non-empty reason.'); return }
     setSaving(true); setMessage('')
     try {
       if (action === 'Report') await reportCommunityPost(alert.id, reason)
-      else await moderateCommunityPost(alert.id, action, reason)
+      else { if (action === 'Verified' && !selectedAreas.length) throw new Error('Select at least one structured notification area before verification.'); await moderateCommunityPost(alert.id, action, reason); if (action === 'Verified') await setAlertNotificationAreas('community_post', alert.id, selectedAreas) }
       setReason(''); setMessage(action === 'Report' ? 'Post reported for responder review.' : `Post marked ${action.toLowerCase()} with an audit entry.`); refreshed()
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'The action could not be saved.') }
     finally { setSaving(false) }
   }
   if (!session) return <p className="post-action-note">Sign in to report a misleading or abusive community post.</p>
-  return <div className="post-actions">{isResponder && <p><b>{flagCount ?? '—'}</b> user report{flagCount === 1 ? '' : 's'} recorded for responder review.</p>}<label>Reason<input value={reason} onChange={(event) => setReason(event.target.value)} placeholder={isResponder ? 'Required moderation reason' : 'Why is this misleading or abusive?'} /></label><div>{!isResponder && <button className="secondary small-button" disabled={saving} onClick={() => void act('Report')}><AlertTriangle /> Report post</button>}{isResponder && <><button className="secondary small-button" disabled={saving || alert.verified} onClick={() => void act('Verified')}><Check /> Verify</button><button className="danger-button small-button" disabled={saving} onClick={() => void act('Removed')}><X /> Remove</button></>}</div>{message && <p role="status">{message}</p>}</div>
+  return <div className="post-actions">{isResponder && <><p><b>{flagCount ?? '—'}</b> user report{flagCount === 1 ? '' : 's'} recorded for responder review.</p><fieldset className="area-picker"><legend>Notification areas {alert.verified ? '' : '(required to verify)'}</legend>{notificationAreas.map((area) => <label key={area.id}><input type="checkbox" checked={selectedAreas.includes(area.id)} onChange={() => setSelectedAreas((current) => current.includes(area.id) ? current.filter((id) => id !== area.id) : [...current, area.id])} /> {area.name}</label>)}</fieldset></>}<label>Reason<input value={reason} onChange={(event) => setReason(event.target.value)} placeholder={isResponder ? 'Required moderation reason' : 'Why is this misleading or abusive?'} /></label><div>{!isResponder && <button className="secondary small-button" disabled={saving} onClick={() => void act('Report')}><AlertTriangle /> Report post</button>}{isResponder && <><button className="secondary small-button" disabled={saving || alert.verified} onClick={() => void act('Verified')}><Check /> Verify</button>{alert.verified && <button className="secondary small-button" disabled={saving} onClick={() => void setAlertNotificationAreas('community_post', alert.id, selectedAreas).then(() => setMessage('Notification areas updated.')).catch((caught) => setMessage(caught instanceof Error ? caught.message : 'Could not update areas.'))}>Save notification areas</button>}<button className="danger-button small-button" disabled={saving} onClick={() => void act('Removed')}><X /> Remove</button></>}</div>{message && <p role="status">{message}</p>}</div>
 }
 
 function WarningCard({ match }: { match: NearbyAlert }) {
@@ -207,13 +204,16 @@ export function AlertPublisher({ report }: { report: Report }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [dangerZoneConfirmed, setDangerZoneConfirmed] = useState(false)
+  const [notificationAreas, setNotificationAreas] = useState<NotificationArea[]>([])
+  const [selectedAreas, setSelectedAreas] = useState<string[]>([])
 
   async function load() {
     setLoading(true)
     try {
       const existing = await fetchAlertForReport(report.id)
       setAlert(existing)
-      if (existing) { setDraft({ title: existing.title, summary: existing.summary, affectedArea: existing.affectedArea, category: existing.category, guidance: existing.guidance, expiresAt: inputDate(existing.expiresAt), dangerLatitude: existing.dangerLatitude?.toString() ?? '', dangerLongitude: existing.dangerLongitude?.toString() ?? '', dangerRadiusKm: existing.dangerRadiusKm?.toString() ?? '' }); setDangerZoneConfirmed(true) }
+      const areas = await fetchNotificationAreas(); setNotificationAreas(areas)
+      if (existing) { setDraft({ title: existing.title, summary: existing.summary, affectedArea: existing.affectedArea, category: existing.category, guidance: existing.guidance, expiresAt: inputDate(existing.expiresAt), dangerLatitude: existing.dangerLatitude?.toString() ?? '', dangerLongitude: existing.dangerLongitude?.toString() ?? '', dangerRadiusKm: existing.dangerRadiusKm?.toString() ?? '' }); setDangerZoneConfirmed(true); setSelectedAreas(await fetchAlertNotificationAreas('responder_alert', existing.id)) }
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Could not load the linked alert.') }
     finally { setLoading(false) }
   }
@@ -222,13 +222,15 @@ export function AlertPublisher({ report }: { report: Report }) {
 
   async function save() {
     const nextErrors = validateAlertDraft(draft)
+    if (!selectedAreas.length) nextErrors.notificationAreas = 'Select at least one structured notification area.'
     if ((draft.dangerLatitude.trim() || draft.dangerLongitude.trim() || draft.dangerRadiusKm.trim()) && !dangerZoneConfirmed) nextErrors.dangerConfirmation = 'Confirm that this responder-selected location is appropriate to publish as the danger zone.'
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length) return
     setSaving(true); setMessage('')
     try {
+      const alertId = alert ? alert.id : await publishAlert(report.id, draft)
       if (alert) await updateAlert(alert.id, draft)
-      else await publishAlert(report.id, draft)
+      await setAlertNotificationAreas('responder_alert', alertId, selectedAreas)
       setMessage(alert ? 'Public alert updated and recorded in audit history.' : 'Public alert published and recorded in audit history.')
       await load()
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Could not save the public alert.') }
@@ -255,6 +257,7 @@ export function AlertPublisher({ report }: { report: Report }) {
       <label>Category <b>*</b><select value={draft.category} onChange={(event) => update('category', event.target.value)}>{alertCategories.filter((item) => item !== 'All').map((item) => <option key={item}>{item}</option>)}</select></label>
       <label>Public guidance <b>*</b><textarea rows={3} value={draft.guidance} maxLength={2000} onChange={(event) => update('guidance', event.target.value)} />{errors.guidance && <small>{errors.guidance}</small>}</label>
       <label>Expiry time <b>*</b><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update('expiresAt', event.target.value)} />{errors.expiresAt && <small>{errors.expiresAt}</small>}</label>
+      <fieldset className="area-picker"><legend>Notification areas <b>*</b></legend><p>Subscribers are matched by these structured area IDs, not by text in the affected-area field.</p>{notificationAreas.map((area) => <label key={area.id}><input type="checkbox" checked={selectedAreas.includes(area.id)} onChange={() => { setSelectedAreas((current) => current.includes(area.id) ? current.filter((id) => id !== area.id) : [...current, area.id]); setErrors((current) => ({ ...current, notificationAreas: '' })) }} /> {area.name}</label>)}{errors.notificationAreas && <small>{errors.notificationAreas}</small>}</fieldset>
       <fieldset><legend>Optional public danger zone</legend><p>This is separate from the reporter’s private location. A responder must explicitly select and confirm any coordinates before they become public.</p><button type="button" className="secondary" onClick={() => { setDraft((current) => ({ ...current, dangerLatitude: report.location.latitude.toString(), dangerLongitude: report.location.longitude.toString(), dangerRadiusKm: current.dangerRadiusKm || '1' })); setDangerZoneConfirmed(false) }}><MapPin /> Select private incident location for review</button><div className="danger-grid"><label>Latitude<input inputMode="decimal" value={draft.dangerLatitude} onChange={(event) => update('dangerLatitude', event.target.value)} />{errors.dangerLatitude && <small>{errors.dangerLatitude}</small>}</label><label>Longitude<input inputMode="decimal" value={draft.dangerLongitude} onChange={(event) => update('dangerLongitude', event.target.value)} />{errors.dangerLongitude && <small>{errors.dangerLongitude}</small>}</label><label>Radius (km)<input inputMode="decimal" value={draft.dangerRadiusKm} onChange={(event) => update('dangerRadiusKm', event.target.value)} />{errors.dangerRadiusKm && <small>{errors.dangerRadiusKm}</small>}</label></div>{(draft.dangerLatitude || draft.dangerLongitude || draft.dangerRadiusKm) && <label className="danger-confirm"><input type="checkbox" checked={dangerZoneConfirmed} onChange={(event) => { setDangerZoneConfirmed(event.target.checked); setErrors((current) => ({ ...current, dangerConfirmation: '' })) }} /> I confirm these responder-selected coordinates and radius are appropriate to publish.</label>}{errors.dangerZone && <small>{errors.dangerZone}</small>}{errors.dangerConfirmation && <small>{errors.dangerConfirmation}</small>}</fieldset>
     </div>
     {message && <p className="auth-message" role="status">{message}</p>}
