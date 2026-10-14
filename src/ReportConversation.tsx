@@ -3,8 +3,10 @@ import { MessageCircle, RefreshCw, Send } from 'lucide-react'
 import { fetchReportMessages, markReportConversationRead, removeReportMessageSubscription, sendReportMessage, subscribeToReportMessages } from './reportMessages'
 import { messageErrorText } from './reportingErrors'
 import type { ReportMessage } from './types'
+import { useI18n } from './i18n'
 
 export function ReportConversation({ reportId, currentUserId, onRead }: { reportId: string; currentUserId: string; onRead: () => void }) {
+  const { t, locale } = useI18n()
   const [messages, setMessages] = useState<ReportMessage[]>([])
   const [draft, setDraft] = useState('')
   const [requestId, setRequestId] = useState(() => crypto.randomUUID())
@@ -50,11 +52,11 @@ export function ReportConversation({ reportId, currentUserId, onRead }: { report
   }
 
   return <section className="history-card conversation-card" aria-labelledby="conversation-title">
-    <div className="conversation-heading"><div><h2 id="conversation-title"><MessageCircle /> Private conversation</h2><p>Only the reporter and authorised responders can read these messages.</p></div><span className={`conversation-connection ${connected ? 'connected' : ''}`} role="status">{connected ? 'Live' : 'Reconnecting'}</span></div>
+    <div className="conversation-heading"><div><h2 id="conversation-title"><MessageCircle /> {t('message.title', 'Private conversation')}</h2><p>{t('message.private', 'Only the reporter and authorised responders can read these messages.')}</p></div><span className={`conversation-connection ${connected ? 'connected' : ''}`} role="status">{connected ? 'Live' : 'Reconnecting'}</span></div>
     <div className="conversation-notice" role="note">Messages stay inside AlertBridge. Sending a message does not mean officers or emergency services were dispatched.</div>
-    {loading ? <p>Loading conversation…</p> : messages.length === 0 ? <p className="neutral-message">No messages yet.</p> : <ol className="message-list">{messages.map((message) => <li key={message.id} className={message.senderId === currentUserId ? 'own-message' : ''}><div><b>{message.authorRole}</b><time>{new Date(message.createdAt).toLocaleString()}</time></div><p>{message.body}</p></li>)}</ol>}
-    <label className="message-compose">Message <span>{draft.length}/2000</span><textarea rows={4} maxLength={2000} value={draft} onChange={(event) => { setDraft(event.target.value); setNotice('') }} placeholder="Write a private message…" /></label>
+    {loading ? <p>Loading conversation…</p> : messages.length === 0 ? <p className="neutral-message">{t('message.none', 'No messages yet.')}</p> : <ol className="message-list">{messages.map((message) => <li key={message.id} className={message.senderId === currentUserId ? 'own-message' : ''}><div><b>{message.authorRole === 'Reporter' ? t('message.reporter', 'Reporter') : t('message.responder', 'Responder')}</b><time>{new Date(message.createdAt).toLocaleString(locale)}</time></div><p>{message.body}</p></li>)}</ol>}
+    <label className="message-compose">Message <span>{draft.length}/2000</span><textarea rows={4} maxLength={2000} value={draft} onChange={(event) => { setDraft(event.target.value); setNotice('') }} placeholder={t('message.placeholder', 'Write a private message…')} /></label>
     {notice && <p className={notice === 'Sent' ? 'auth-message' : 'control-message'} role="status">{notice}</p>}
-    <div className="conversation-actions"><button className="secondary" onClick={() => void load()} disabled={loading}><RefreshCw /> Refresh</button><button className="primary" onClick={() => void send()} disabled={sending || !draft.trim()}><Send /> {sending ? 'Sending…' : 'Send message'}</button></div>
+    <div className="conversation-actions"><button className="secondary" onClick={() => void load()} disabled={loading}><RefreshCw /> {t('common.refresh', 'Refresh')}</button><button className="primary" onClick={() => void send()} disabled={sending || !draft.trim()}><Send /> {sending ? 'Sending…' : t('message.send', 'Send message')}</button></div>
   </section>
 }

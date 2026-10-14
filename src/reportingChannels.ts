@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { AssistanceAction, Draft } from './types'
+import type { AssistanceAction, AssistanceOutcomeAction, AssistanceOutcomeActionType, Draft, OutcomeConfirmation, OutcomeFeedback } from './types'
 
 function client() { if (!supabase) throw new Error('AlertBridge service is unavailable.'); return supabase }
 
@@ -59,6 +59,37 @@ export async function recordAssistanceAction(reportId: string, action: Assistanc
     agency_name: action === 'Forwarded to agency' ? agency.trim() : null,
     agency_handoff_time: action === 'Forwarded to agency' && handoffTime ? new Date(handoffTime).toISOString() : null,
     agency_handoff_reference: action === 'Forwarded to agency' ? reference.trim() || null : null,
+  })
+  if (error) throw error
+}
+
+interface OutcomeActionRow { id: string; action_type: AssistanceOutcomeActionType; note: string; recorded_at: string }
+interface OutcomeFeedbackRow { id: string; revision: number; confirmation: OutcomeConfirmation; comment: string | null; submitted_at: string }
+
+export async function fetchOutcomeHistory(reportId: string): Promise<{ actions: AssistanceOutcomeAction[]; feedback: OutcomeFeedback[] }> {
+  const [actionResult, feedbackResult] = await Promise.all([
+    client().from('report_assistance_outcomes').select('id, action_type, note, recorded_at').eq('report_id', reportId).order('recorded_at'),
+    client().from('report_outcome_feedback').select('id, revision, confirmation, comment, submitted_at').eq('report_id', reportId).order('revision'),
+  ])
+  if (actionResult.error) throw actionResult.error
+  if (feedbackResult.error) throw feedbackResult.error
+  return {
+    actions: (actionResult.data as OutcomeActionRow[]).map((row) => ({ id: row.id, actionType: row.action_type, note: row.note, recordedAt: row.recorded_at })),
+    feedback: (feedbackResult.data as OutcomeFeedbackRow[]).map((row) => ({ id: row.id, revision: row.revision, confirmation: row.confirmation, comment: row.comment ?? undefined, submittedAt: row.submitted_at })),
+  }
+}
+
+export async function recordAssistanceOutcomeAction(reportId: string, action: AssistanceOutcomeActionType, note: string) {
+  const { error } = await client().rpc('record_assistance_outcome_action', { target_report_id: reportId, outcome_action: action, action_note: note.trim() })
+  if (error) throw error
+}
+
+export async function submitOutcomeFeedback(reportId: string, confirmation: OutcomeConfirmation, comment: string, requestId: string) {
+  const { error } = await client().rpc('submit_reporter_outcome_feedback', {
+    target_report_id: reportId,
+    feedback_confirmation: confirmation,
+    feedback_comment: comment.trim() || null,
+    feedback_request_id: requestId,
   })
   if (error) throw error
 }

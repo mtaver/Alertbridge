@@ -26,3 +26,13 @@ export function subscribeToPrivateReportChanges(onChange: () => void): RealtimeC
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'private_report_events' }, onChange)
     .subscribe((status) => { if (status === 'SUBSCRIBED') onChange() })
 }
+
+export function subscribeToOutcomeChanges(reportId: string | null, onChange: () => void): RealtimeChannel | null {
+  if (!supabase) return null
+  const changes = reportId
+    ? { event: 'INSERT' as const, schema: 'public', table: 'report_outcome_events', filter: `report_id=eq.${reportId}` }
+    : { event: 'INSERT' as const, schema: 'public', table: 'report_outcome_events' }
+  return supabase.channel(reportId ? `report-outcomes-${reportId}` : 'report-outcome-dashboard')
+    .on('postgres_changes', changes, onChange)
+    .subscribe((status) => { if (status === 'SUBSCRIBED') onChange() })
+}

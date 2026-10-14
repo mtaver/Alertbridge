@@ -1,11 +1,13 @@
 import { supabase } from './supabase'
-import type { Answer, Category, Mode, Report, Status, StatusEvent } from './types'
+import type { Answer, AssistanceOutcomeAction, Category, Mode, OutcomeFeedback, Report, Status, StatusEvent } from './types'
 
 interface HistoryRow { new_status: Status; changed_at: string; reason: string | null }
 interface ReportRow {
-  id: string; created_at: string; mode: Mode; category: Category; description: string
+  id: string; reporter_id: string; created_at: string; mode: Mode; category: Category; description: string
   happening_now: Answer | null; anyone_injured: Answer | null; additional_details: string | null
   latitude: number; longitude: number; status: Status; report_status_history?: HistoryRow[]
+  report_assistance_outcomes?: Array<{ id: string; action_type: AssistanceOutcomeAction['actionType']; note: string; recorded_at: string }>
+  report_outcome_feedback?: Array<{ id: string; revision: number; confirmation: OutcomeFeedback['confirmation']; comment: string | null; submitted_at: string }>
 }
 
 function requireClient() {
@@ -17,16 +19,23 @@ function mapReport(row: ReportRow): Report {
   const history: StatusEvent[] = (row.report_status_history ?? [])
     .map((event) => ({ status: event.new_status, at: event.changed_at, reason: event.reason ?? undefined }))
     .sort((a, b) => a.at.localeCompare(b.at))
+  const assistanceOutcomes: AssistanceOutcomeAction[] = (row.report_assistance_outcomes ?? []).map((item) => ({ id: item.id, actionType: item.action_type, note: item.note, recordedAt: item.recorded_at })).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
+  const outcomeFeedback: OutcomeFeedback[] = (row.report_outcome_feedback ?? []).map((item) => ({ id: item.id, revision: item.revision, confirmation: item.confirmation, comment: item.comment ?? undefined, submittedAt: item.submitted_at })).sort((a, b) => a.revision - b.revision)
+  const confirmationRequested = assistanceOutcomes.some((item) => item.actionType === 'Assistance provided' || item.actionType === 'Issue attended to')
+  const latestFeedback = outcomeFeedback.at(-1)
+  const followUpRecorded = assistanceOutcomes.some((item) => item.actionType === 'Follow-up action' && latestFeedback && item.recordedAt > latestFeedback.submittedAt)
   return {
-    id: row.id, createdAt: row.created_at, mode: row.mode, category: row.category,
+    id: row.id, reporterId: row.reporter_id, createdAt: row.created_at, mode: row.mode, category: row.category,
     description: row.description, happeningNow: row.happening_now ?? undefined,
     anyoneInjured: row.anyone_injured ?? undefined, additionalDetails: row.additional_details ?? undefined,
     location: { latitude: Number(row.latitude), longitude: Number(row.longitude) },
-    status: row.status, history,
+    status: row.status, history, assistanceOutcomes, outcomeFeedback,
+    awaitingOutcomeConfirmation: confirmationRequested && !latestFeedback,
+    outcomeFollowUpRequired: !followUpRecorded && (latestFeedback?.confirmation === 'Partly addressed' || latestFeedback?.confirmation === 'Assistance not received'),
   }
 }
 
-const reportSelection = 'id, created_at, mode, category, description, happening_now, anyone_injured, additional_details, latitude, longitude, status, report_status_history(new_status, changed_at, reason)'
+const reportSelection = 'id, reporter_id, created_at, mode, category, description, happening_now, anyone_injured, additional_details, latitude, longitude, status, report_status_history(new_status, changed_at, reason), report_assistance_outcomes(id, action_type, note, recorded_at), report_outcome_feedback(id, revision, confirmation, comment, submitted_at)'
 
 export async function fetchConnectedReports(): Promise<Report[]> {
   const client = requireClient()

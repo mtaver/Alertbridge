@@ -98,7 +98,7 @@ test('authorised responder dashboard links to public community-post moderation',
 test('reporting form explains the public fields and offers all three channels', () => {
   assert.match(app, /Warn the community/)
   assert.match(app, /Request emergency assistance/)
-  assert.match(app, /title="Both"/)
+  assert.match(app, /title=\{t\('report\.both', 'Both'\)\}/)
   assert.match(app, /Your email, private description, questionnaire answers and additional details will not be published automatically/)
   assert.match(app, /Use my current location/)
   assert.match(app, /Incident is somewhere else/)

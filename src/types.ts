@@ -12,6 +12,7 @@ export interface StatusEvent {
 
 export interface Report {
   id: string
+  reporterId: string
   createdAt: string
   mode: Mode
   category: Category
@@ -22,6 +23,10 @@ export interface Report {
   location: { latitude: number; longitude: number }
   status: Status
   history: StatusEvent[]
+  assistanceOutcomes: AssistanceOutcomeAction[]
+  outcomeFeedback: OutcomeFeedback[]
+  awaitingOutcomeConfirmation: boolean
+  outcomeFollowUpRequired: boolean
 }
 
 export interface Draft {
@@ -71,6 +76,24 @@ export interface AssistanceAction {
   agencyReference?: string
   handedOffAt?: string
   recordedAt: string
+}
+
+export type AssistanceOutcomeActionType = 'Assistance provided' | 'Issue attended to' | 'Follow-up action'
+export type OutcomeConfirmation = 'Assistance received' | 'Partly addressed' | 'Assistance not received' | 'Cannot confirm'
+
+export interface AssistanceOutcomeAction {
+  id: string
+  actionType: AssistanceOutcomeActionType
+  note: string
+  recordedAt: string
+}
+
+export interface OutcomeFeedback {
+  id: string
+  revision: number
+  confirmation: OutcomeConfirmation
+  comment?: string
+  submittedAt: string
 }
 
 export interface ReportMessage {

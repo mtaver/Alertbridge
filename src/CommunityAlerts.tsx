@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { AlertTriangle, Bell, BellOff, Check, LocateFixed, MapPin, Megaphone, Navigation, RefreshCw, X } from 'lucide-react'
 import { fetchAlertForReport, fetchPublicAlerts, publishAlert, setAlertStatus, updateAlert, validateAlertDraft } from './alerts'
@@ -7,18 +7,22 @@ import { nearbyAlerts, newWarningMatches, validCoordinates, type Coordinates, ty
 import { fetchCommunityPostFlagCount, moderateCommunityPost, reportCommunityPost } from './reportingChannels'
 import { isSupabaseConfigured } from './supabase'
 import type { AlertDraft, Category, CommunityAlert, Report } from './types'
-import { PlaceSearch } from './PlaceSearch'
+import { MapLocationSelector } from './MapLocationSelector'
 import { displayedAlertGuidance } from './alertPresentation'
 import { PushNotificationSettings } from './PushNotificationSettings'
+import { SectionErrorBoundary } from './SectionErrorBoundary'
+import { useI18n } from './i18n'
 import { fetchAlertNotificationAreas, fetchNotificationAreas, setAlertNotificationAreas, type NotificationArea } from './pushNotifications'
 
 const alertCategories: Array<Category | 'All'> = ['All', 'Security threat', 'Flood', 'Landslide', 'Fire', 'Other']
+const InteractiveMap = lazy(() => import('./InteractiveMap'))
 
 function formatAlertDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }
 
 export function CommunityAlertsFeed({ session, isResponder }: { session: Session | null; isResponder: boolean }) {
+  const { t } = useI18n()
   const [alerts, setAlerts] = useState<CommunityAlert[]>([])
   const [loading, setLoading] = useState(isSupabaseConfigured)
   const [error, setError] = useState('')
@@ -40,6 +44,8 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
   const [destinationLongitude, setDestinationLongitude] = useState('')
   const [destinationMatches, setDestinationMatches] = useState<NearbyAlert[] | null>(null)
   const [destinationError, setDestinationError] = useState('')
+  const [selectedMapAlertId, setSelectedMapAlertId] = useState<string | null>(null)
+  const [clock, setClock] = useState(() => Date.now())
   const warnedVersions = useRef(new Map<string, string>())
   const watchId = useRef<number | null>(null)
 
@@ -57,13 +63,14 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
     window.addEventListener('online', recover)
     return () => { window.removeEventListener('online', recover); void removePublicAlertSubscription(channel) }
   }, [])
+  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 30000); return () => window.clearInterval(timer) }, [])
   useEffect(() => {
     const targetAlert = new URLSearchParams(window.location.search).get('alert')
     if (targetAlert && alerts.length) document.getElementById(`alert-${targetAlert}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [alerts])
 
   const filtered = useMemo(() => alerts.filter((alert) => {
-    const active = alert.displayStatus === 'Published' && new Date(alert.expiresAt).getTime() > Date.now()
+    const active = alert.displayStatus === 'Published' && new Date(alert.expiresAt).getTime() > clock
     if (!showPastAlerts && !active) return false
     if (category !== 'All' && alert.category !== category) return false
     if (area.trim() && !alert.affectedArea.toLowerCase().includes(area.trim().toLowerCase())) return false
@@ -72,8 +79,14 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
       return nearbyAlerts([alert], location, 0).length > 0
     }
     return true
-  }), [alerts, category, area, location, showPastAlerts])
-  const warningAlerts = useMemo(() => alerts.filter((alert) => alert.verified || includeCommunityWarnings), [alerts, includeCommunityWarnings])
+  }), [alerts, category, area, location, showPastAlerts, clock])
+  const warningAlerts = useMemo(() => alerts.filter((alert) => alert.verified || includeCommunityWarnings), [alerts, includeCommunityWarnings, clock])
+  const mappedAlerts = useMemo(() => filtered.filter((alert) => alert.displayStatus === 'Published' && new Date(alert.expiresAt).getTime() > clock && alert.dangerLatitude !== undefined && alert.dangerLongitude !== undefined && alert.dangerRadiusKm !== undefined), [filtered, clock])
+
+  function selectMapAlert(alertId: string) {
+    setSelectedMapAlertId(alertId)
+    window.requestAnimationFrame(() => document.getElementById(`alert-${alertId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }
 
   function useNearMe() {
     setLocationMessage('')
@@ -125,7 +138,7 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
   function checkDestinationAt(latitude: number, longitude: number) { setDestinationError(''); setDestinationMatches(nearbyAlerts(warningAlerts, { latitude, longitude }, approachDistance)) }
 
   return <section className="page alerts-page">
-    <div className="alerts-heading"><div><span className="mini-label">PUBLIC COMMUNITY ALERTS</span><h1>Community alerts</h1><p>Community warnings and responder-verified alerts. AlertBridge is not connected to emergency services.</p></div><button className="secondary" onClick={() => void loadAlerts()} disabled={loading}><RefreshCw /> Refresh</button></div>
+    <div className="alerts-heading"><div><span className="mini-label">PUBLIC COMMUNITY ALERTS</span><h1>{t('alerts.title', 'Community alerts')}</h1><p>{t('alerts.intro', 'Community warnings and responder-verified alerts. AlertBridge is not connected to emergency services.')}</p></div><button className="secondary" onClick={() => void loadAlerts()} disabled={loading}><RefreshCw /> {t('common.refresh', 'Refresh')}</button></div>
     <div className={`connection-status ${connection}`} role="status"><span aria-hidden="true"></span><b>{connection === 'connected' ? 'Live updates connected' : connection === 'connecting' ? 'Connecting to live updates…' : connection === 'unavailable' ? 'Live updates are unavailable' : 'Live updates disconnected'}</b><small>{lastRefresh ? `Last refreshed ${lastRefresh.toLocaleTimeString()}` : 'No successful refresh yet'}{connection === 'disconnected' ? ' · Current alerts will be fetched after reconnection.' : ''}</small></div>
     <div className="alert-filters" aria-label="Alert filters">
       <label>Category<select value={category} onChange={(event) => setCategory(event.target.value as Category | 'All')}>{alertCategories.map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -135,10 +148,16 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
     </div>
     {locationMessage && <p className="privacy-note" role="status"><LocateFixed /> {locationMessage}</p>}
     {error && <p className="submission-error" role="alert"><AlertTriangle /> {error}</p>}
+    <section className="danger-map-section" aria-labelledby="danger-map-heading"><div className="danger-map-heading"><div><span className="mini-label">ACTIVE PUBLIC DANGER ZONES</span><h2 id="danger-map-heading">Danger map</h2><p>The map uses only published public danger-zone coordinates and radii. It never loads private reports, messages, reporter identity or private device locations.</p></div><div className="danger-map-legend" aria-label="Map legend"><span><i className="verified-zone">V</i> Responder-verified</span><span><i className="unverified-zone">U</i> Community report — unverified</span></div></div>
+      <SectionErrorBoundary resetKey={`${category}:${area}:${showPastAlerts}`} fallback={<p className="submission-error" role="alert">The danger map could not be loaded. The alert list below is still available.</p>}>
+        <Suspense fallback={<p className="map-loading" role="status">Loading interactive map…</p>}><InteractiveMap alerts={mappedAlerts} selectedAlertId={selectedMapAlertId} onSelectAlert={selectMapAlert} ariaLabel="Active public AlertBridge danger zones" /></Suspense>
+      </SectionErrorBoundary>
+      {mappedAlerts.length === 0 && <p className="neutral-message">No active public danger zones with map coordinates match these filters. This does not mean the area is safe.</p>}
+    </section>
     {loading ? <div className="empty-state"><Megaphone /><h2>Loading alerts…</h2></div> : filtered.length === 0 ? <div className="empty-state"><Megaphone /><h2>No alerts match these filters</h2><p>No active alert is currently available here. This does not mean the area is safe.{!showPastAlerts && ' Select “Show past alerts” to include expired and resolved items.'}</p></div> : <div className="alerts-grid">
       {filtered.map((alert) => {
         const activity = alert.displayStatus === 'Published' && new Date(alert.expiresAt).getTime() > Date.now() ? 'Active' : alert.displayStatus === 'Resolved' ? 'Resolved' : 'Expired'
-        return <article id={`alert-${alert.id}`} className={`alert-card ${activity.toLowerCase()} ${alert.sourceKind}`} key={alert.id}>
+        return <article id={`alert-${alert.id}`} className={`alert-card ${activity.toLowerCase()} ${alert.sourceKind} ${selectedMapAlertId === alert.id ? 'map-selected' : ''}`} key={alert.id}>
         <div className="alert-card-top"><span className="alert-category">{alert.category}</span><span className={`alert-state ${activity.toLowerCase()}`}>{activity}</span></div>
         <span className={alert.verified ? 'source-label verified-source' : 'source-label unverified-source'}>{alert.verified ? 'Responder-verified' : 'Community report — unverified'}</span>
         <h2>{alert.title}</h2><p>{alert.summary}</p>
@@ -149,15 +168,15 @@ export function CommunityAlertsFeed({ session, isResponder }: { session: Session
     </div>}
     <PushNotificationSettings session={session} />
     <section className="warning-controls" aria-labelledby="nearby-warning-heading">
-      <div><span className="mini-label">OPT-IN LOCATION</span><h2 id="nearby-warning-heading">Nearby danger warnings</h2><p>Check active danger zones near you. Your location stays on this device.</p><details className="warning-details"><summary>How nearby warnings work</summary><p>AlertBridge compares your location locally while this page is open. Warnings may be interrupted by lost connectivity. It does not reliably warn you when the app is closed or the phone is locked, and there is no offline or background delivery.</p></details></div>
+      <div><span className="mini-label">OPT-IN LOCATION</span><h2 id="nearby-warning-heading">{t('alerts.nearby', 'Nearby danger warnings')}</h2><p>Check active danger zones near you. Your location stays on this device.</p><details className="warning-details"><summary>How nearby warnings work</summary><p>AlertBridge compares your location locally while this page is open. Warnings may be interrupted by lost connectivity. It does not reliably warn you when the app is closed or the phone is locked, and there is no offline or background delivery.</p></details></div>
       <label>Approach distance<select value={approachDistance} onChange={(event) => setApproachDistance(Number(event.target.value))}><option value={0}>Inside zone only</option><option value={0.5}>Within 0.5 km</option><option value={1}>Within 1 km</option><option value={2}>Within 2 km</option><option value={5}>Within 5 km</option></select></label>
-      <label className="warning-source"><input type="checkbox" checked={includeCommunityWarnings} onChange={(event) => setIncludeCommunityWarnings(event.target.checked)} /> Include unverified community warnings</label>
-      <button className={warningsEnabled ? 'danger-button' : 'primary'} onClick={() => setWarningsEnabled((enabled) => !enabled)}>{warningsEnabled ? <BellOff /> : <Bell />} {warningsEnabled ? 'Disable nearby warnings' : 'Enable nearby warnings'}</button>
+      <label className="warning-source"><input type="checkbox" checked={includeCommunityWarnings} onChange={(event) => setIncludeCommunityWarnings(event.target.checked)} /> {t('alerts.includeUnverified', 'Include unverified community warnings')}</label>
+      <button className={warningsEnabled ? 'danger-button' : 'primary'} onClick={() => setWarningsEnabled((enabled) => !enabled)}>{warningsEnabled ? <BellOff /> : <Bell />} {warningsEnabled ? t('alerts.disableNearby', 'Disable nearby warnings') : t('alerts.enableNearby', 'Enable nearby warnings')}</button>
     </section>
     {warningAnnouncement && <p className="visually-hidden" role="alert">{warningAnnouncement}</p>}
-    {warningsEnabled && warningMatches.length > 0 && <section className="nearby-warnings" aria-label="Nearby danger warnings"><h2><AlertTriangle /> Reported danger nearby. Avoid the affected area and review guidance.</h2>{warningMatches.map((match) => <WarningCard key={match.alert.id} match={match} />)}</section>}
+    {warningsEnabled && warningMatches.length > 0 && <section className="nearby-warnings" aria-label={t('a11y.nearbyWarnings', 'Nearby danger warnings')}><h2><AlertTriangle /> {t('alerts.reportedNearby', 'Reported danger nearby. Avoid the affected area and review guidance.')}</h2>{warningMatches.map((match) => <WarningCard key={match.alert.id} match={match} />)}</section>}
     {warningsEnabled && warningLocation && warningMatches.length === 0 && <p className="neutral-message">No matching public danger zones were found at this location. This does not mean the area is safe.</p>}
-    <section className="destination-check" aria-labelledby="destination-heading"><div><span className="mini-label">DESTINATION-AREA CHECK</span><h2 id="destination-heading">Check alerts near a destination</h2><p>Choose the place you intend to visit. Your current GPS location is not used as the destination. This checks only the selected destination area; it does not inspect the journey or provide route avoidance.</p></div><PlaceSearch label="Search for a destination" onSelect={(latitude, longitude) => { setDestinationLatitude(latitude.toFixed(6)); setDestinationLongitude(longitude.toFixed(6)); checkDestinationAt(latitude, longitude) }} /><details className="advanced-location"><summary>Advanced: enter destination coordinates manually</summary><div className="destination-fields"><label>Destination latitude<input inputMode="decimal" value={destinationLatitude} onChange={(event) => setDestinationLatitude(event.target.value)} /></label><label>Destination longitude<input inputMode="decimal" value={destinationLongitude} onChange={(event) => setDestinationLongitude(event.target.value)} /></label><button className="secondary" onClick={checkDestination}><Navigation /> Check destination</button></div></details>{destinationError && <p className="submission-error" role="alert"><AlertTriangle /> {destinationError}</p>}{destinationMatches && (destinationMatches.length ? <div className="destination-results">{destinationMatches.map((match) => <WarningCard key={match.alert.id} match={match} />)}</div> : <p className="neutral-message">No matching public danger zones were found near this destination. This does not mean the area is safe.</p>)}</section>
+    <section className="destination-check" aria-labelledby="destination-heading"><div><span className="mini-label">DESTINATION-AREA CHECK</span><h2 id="destination-heading">Check alerts near a destination</h2><p>Choose the place you intend to visit. Your current GPS location is not used as the destination. This checks only the selected destination area; it does not inspect the journey or provide route avoidance.</p></div><MapLocationSelector label="Pin a destination" initial={destinationLatitude && destinationLongitude ? { latitude: Number(destinationLatitude), longitude: Number(destinationLongitude) } : null} onConfirm={(latitude, longitude) => { setDestinationLatitude(latitude.toFixed(6)); setDestinationLongitude(longitude.toFixed(6)); checkDestinationAt(latitude, longitude) }} /><details className="advanced-location"><summary>Advanced: enter destination coordinates manually</summary><div className="destination-fields"><label>Destination latitude<input inputMode="decimal" value={destinationLatitude} onChange={(event) => setDestinationLatitude(event.target.value)} /></label><label>Destination longitude<input inputMode="decimal" value={destinationLongitude} onChange={(event) => setDestinationLongitude(event.target.value)} /></label><button className="secondary" onClick={checkDestination}><Navigation /> Check destination</button></div></details>{destinationError && <p className="submission-error" role="alert"><AlertTriangle /> {destinationError}</p>}{destinationMatches && (destinationMatches.length ? <div className="destination-results">{destinationMatches.map((match) => <WarningCard key={match.alert.id} match={match} />)}</div> : <p className="neutral-message">No matching public danger zones were found near this destination. This does not mean the area is safe.</p>)}</section>
   </section>
 }
 
@@ -258,7 +277,7 @@ export function AlertPublisher({ report }: { report: Report }) {
       <label>Public guidance <b>*</b><textarea rows={3} value={draft.guidance} maxLength={2000} onChange={(event) => update('guidance', event.target.value)} />{errors.guidance && <small>{errors.guidance}</small>}</label>
       <label>Expiry time <b>*</b><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update('expiresAt', event.target.value)} />{errors.expiresAt && <small>{errors.expiresAt}</small>}</label>
       <fieldset className="area-picker"><legend>Notification areas <b>*</b></legend><p>Subscribers are matched by these structured area IDs, not by text in the affected-area field.</p>{notificationAreas.map((area) => <label key={area.id}><input type="checkbox" checked={selectedAreas.includes(area.id)} onChange={() => { setSelectedAreas((current) => current.includes(area.id) ? current.filter((id) => id !== area.id) : [...current, area.id]); setErrors((current) => ({ ...current, notificationAreas: '' })) }} /> {area.name}</label>)}{errors.notificationAreas && <small>{errors.notificationAreas}</small>}</fieldset>
-      <fieldset><legend>Optional public danger zone</legend><p>This is separate from the reporter’s private location. A responder must explicitly select and confirm any coordinates before they become public.</p><button type="button" className="secondary" onClick={() => { setDraft((current) => ({ ...current, dangerLatitude: report.location.latitude.toString(), dangerLongitude: report.location.longitude.toString(), dangerRadiusKm: current.dangerRadiusKm || '1' })); setDangerZoneConfirmed(false) }}><MapPin /> Select private incident location for review</button><div className="danger-grid"><label>Latitude<input inputMode="decimal" value={draft.dangerLatitude} onChange={(event) => update('dangerLatitude', event.target.value)} />{errors.dangerLatitude && <small>{errors.dangerLatitude}</small>}</label><label>Longitude<input inputMode="decimal" value={draft.dangerLongitude} onChange={(event) => update('dangerLongitude', event.target.value)} />{errors.dangerLongitude && <small>{errors.dangerLongitude}</small>}</label><label>Radius (km)<input inputMode="decimal" value={draft.dangerRadiusKm} onChange={(event) => update('dangerRadiusKm', event.target.value)} />{errors.dangerRadiusKm && <small>{errors.dangerRadiusKm}</small>}</label></div>{(draft.dangerLatitude || draft.dangerLongitude || draft.dangerRadiusKm) && <label className="danger-confirm"><input type="checkbox" checked={dangerZoneConfirmed} onChange={(event) => { setDangerZoneConfirmed(event.target.checked); setErrors((current) => ({ ...current, dangerConfirmation: '' })) }} /> I confirm these responder-selected coordinates and radius are appropriate to publish.</label>}{errors.dangerZone && <small>{errors.dangerZone}</small>}{errors.dangerConfirmation && <small>{errors.dangerConfirmation}</small>}</fieldset>
+      <fieldset><legend>Optional public danger zone</legend><p>This is separate from the reporter’s private location. A responder must explicitly select and confirm any coordinates before they become public.</p><button type="button" className="secondary" onClick={() => { setDraft((current) => ({ ...current, dangerLatitude: report.location.latitude.toString(), dangerLongitude: report.location.longitude.toString(), dangerRadiusKm: current.dangerRadiusKm || '1' })); setDangerZoneConfirmed(false) }}><MapPin /> Select private incident location for review</button><MapLocationSelector label="Pin the responder-selected public danger zone" publicLocation initial={draft.dangerLatitude && draft.dangerLongitude ? { latitude: Number(draft.dangerLatitude), longitude: Number(draft.dangerLongitude) } : null} onConfirm={(latitude, longitude) => { update('dangerLatitude', latitude.toFixed(6)); update('dangerLongitude', longitude.toFixed(6)); setDangerZoneConfirmed(false) }} /><div className="danger-grid"><label>Latitude<input inputMode="decimal" value={draft.dangerLatitude} onChange={(event) => update('dangerLatitude', event.target.value)} />{errors.dangerLatitude && <small>{errors.dangerLatitude}</small>}</label><label>Longitude<input inputMode="decimal" value={draft.dangerLongitude} onChange={(event) => update('dangerLongitude', event.target.value)} />{errors.dangerLongitude && <small>{errors.dangerLongitude}</small>}</label><label>Radius (km)<input inputMode="decimal" value={draft.dangerRadiusKm} onChange={(event) => update('dangerRadiusKm', event.target.value)} />{errors.dangerRadiusKm && <small>{errors.dangerRadiusKm}</small>}</label></div>{(draft.dangerLatitude || draft.dangerLongitude || draft.dangerRadiusKm) && <label className="danger-confirm"><input type="checkbox" checked={dangerZoneConfirmed} onChange={(event) => { setDangerZoneConfirmed(event.target.checked); setErrors((current) => ({ ...current, dangerConfirmation: '' })) }} /> I confirm these responder-selected coordinates and radius are appropriate to publish.</label>}{errors.dangerZone && <small>{errors.dangerZone}</small>}{errors.dangerConfirmation && <small>{errors.dangerConfirmation}</small>}</fieldset>
     </div>
     {message && <p className="auth-message" role="status">{message}</p>}
     <div className="publisher-actions"><button className="primary" onClick={() => void save()} disabled={saving}><Check /> {saving ? 'Saving…' : alert ? 'Save public update' : 'Publish alert'}</button>{alert?.displayStatus === 'Published' && <><button className="secondary" onClick={() => void changeStatus('Resolved')} disabled={saving}><Check /> Resolve</button><button className="danger-button" onClick={() => void changeStatus('Withdrawn')} disabled={saving}><X /> Withdraw</button></>}</div>

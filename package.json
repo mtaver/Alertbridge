@@ -13,11 +13,13 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
     "lucide-react": "latest",
+    "leaflet": "1.9.4",
     "react": "latest",
     "react-dom": "latest",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.21",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@types/web-push": "^3.6.4",

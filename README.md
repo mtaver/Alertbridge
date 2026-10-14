@@ -43,15 +43,21 @@ The anon/publishable key is intended for browser clients and is constrained by r
 
 Restart Vite after changing environment variables.
 
-### Optional place search
+### Optional Leaflet maps with Stadia tiles
 
-Incident and destination place search uses the Mapbox Geocoding v6 REST API directly and adds no map-library dependency. Create a public Mapbox access token, restrict it to the application's allowed URLs in Mapbox, and set:
+AlertBridge lazy-loads Leaflet for the public danger map and map-pin selectors. Place search remains disabled. Maps are rendered only when `VITE_STADIA_TILE_URL` is configured; the application never silently falls back to OpenStreetMap's community tile servers.
 
 ```dotenv
-VITE_MAPBOX_ACCESS_TOKEN=your-public-url-restricted-token
+VITE_STADIA_TILE_URL=https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png
 ```
 
-Search text is sent to Mapbox only after the user selects **Search**. GPS coordinates are not sent to Mapbox by nearby monitoring. Without this variable, GPS selection and the advanced manual-coordinate fallback continue to work; the interface explains that place search is unavailable.
+Create a Stadia Maps property and add the deployed AlertBridge domain to its domain-authentication allowlist before setting this variable in Vercel. The map preserves linked attribution to Stadia Maps, OpenMapTiles and OpenStreetMap. Leaflet itself is open source and does not require an account or payment.
+
+Loading or moving a map requests tiles from Stadia Maps. Those requests reveal ordinary connection information such as the visitor's IP address, browser request metadata and the approximate area and zoom level being viewed. GPS coordinates are obtained through the browser and are not sent to Stadia by AlertBridge. A clicked map pin is kept in the form until the user confirms it; confirmed coordinates are then handled under the existing private or public location rules.
+
+Stadia currently describes its Free plan as suitable for development, evaluation, demonstration and non-commercial use, with 200,000 monthly credits, raster tiles charged at one credit per tile, no paid overages and no payment method required. Commercial use requires a paid plan; the current Starter price is $20/month. Plans, limits and prices can change, and free service should not be treated as guaranteed delivery or availability. Review the current [Stadia pricing](https://stadiamaps.com/pricing), [service limits](https://docs.stadiamaps.com/limits/), [Leaflet setup](https://docs.stadiamaps.com/tutorials/raster-maps-with-leaflet/) and [attribution requirements](https://docs.stadiamaps.com/attribution/) before activation.
+
+If tiles are unavailable, the public alert list, GPS controls, nearby calculations and Advanced manual-coordinate entry remain usable. A failed map never means that an area is safe.
 
 ## Vercel deployment preparation
 
@@ -68,7 +74,7 @@ Configure these environment-variable names in Vercel Project Settings:
 
 - `VITE_SUPABASE_URL` — required
 - `VITE_SUPABASE_ANON_KEY` — required; use only the public browser key, never a service-role key
-- `VITE_MAPBOX_ACCESS_TOKEN` — optional; place search remains unavailable when omitted
+- `VITE_STADIA_TILE_URL` — optional; enables Leaflet maps and map-pin selection after Stadia domain authentication is configured
 - `VITE_WEB_PUSH_VAPID_PUBLIC_KEY` — public VAPID key; required only when Web Push is activated
 
 The Web Push delivery function also requires server-only Vercel variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, and `CRON_SECRET`. Never prefix the private key, service-role key, or cron secret with `VITE_`; doing so would expose it in browser JavaScript.
@@ -92,7 +98,7 @@ Deployment does not connect AlertBridge to an emergency service or agency. Keep 
 1. In Vercel, choose **Add New → Project** and import the GitHub repository `mtaver/Alertbridge`.
 2. Leave the root directory at the repository root and select the **Vite** framework preset.
 3. Confirm the build command is `pnpm run build` and the output directory is `dist`.
-4. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Add `VITE_MAPBOX_ACCESS_TOKEN` only if place search is wanted.
+4. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Add `VITE_STADIA_TILE_URL` only after configuring the deployed domain in Stadia Maps. Place search remains disabled.
 5. Review the settings, but do not deploy until the Supabase production Site URL and Redirect URL plan is ready.
 6. After the first deployment supplies the final HTTPS URL, update Supabase URL Configuration as described above and redeploy if any Vercel environment variables changed.
 
@@ -111,6 +117,7 @@ Deployment does not connect AlertBridge to an emergency service or agency. Keep 
    7. `supabase/migrations/20261009000300_private_report_messaging.sql`
    8. `supabase/migrations/20261009000400_web_push_notifications.sql`
    9. `supabase/migrations/20261009000500_supabase_push_scheduler.sql`
+   10. `supabase/migrations/20261009000600_reporter_outcome_feedback.sql`
 4. For a local Supabase stack, run `supabase start` followed by `supabase db reset`.
 5. For a hosted project, link it and preview before applying:
 
@@ -263,6 +270,7 @@ order by changed_at;
 - Own-report dashboard and database-authorised responder controls
 - Public Community Alerts feed for signed-in and signed-out visitors
 - Category, affected-area and opt-in Near me filtering; visitor coordinates remain in memory on the device
+- Lazy-loaded interactive public danger map with radius polygons, accessible verified/unverified markers, feed-synchronised filters and list fallback
 - Responder-authored publication linked to—but stored separately from—a Verified private report
 - Explicit public fields, optional public danger zones, expiry handling and active/resolved/expired presentation
 - Responder updates, resolution and withdrawal with append-only alert audit history
@@ -273,20 +281,21 @@ order by changed_at;
 - Opt-in background-capable Web Push for selected structured areas, with account-owned subscriptions and a retryable server-side queue
 - Reporting choices for a public community warning, a private assistance request, or an atomic linked submission containing both
 - Separate coordinates for private assistance and the public danger zone; device coordinates are published only after the reporter explicitly chooses the public-location control
-- Primary GPS location actions, optional place search, and advanced manual-coordinate disclosures for incident and destination selection
+- Primary GPS location actions, optional Leaflet map-pin confirmation using configured Stadia tiles, and advanced manual-coordinate disclosures for private incidents, public danger zones and destinations; place search remains disabled
 - Editable, category-specific public-summary templates for guided reports; generation is explicit and never reads private descriptions, additional details or reporter identity
 - Authenticated community warnings clearly labelled **Community report — unverified**, with responder verification/removal, abuse reporting and immutable moderation history
 - Retry-safe connected submission through a client request ID and transactional database receipt
 - Private assistance acknowledgement, coordination notes and documented agency handoffs kept separate from report verification and resolution
 - Responder-only private-report Realtime signals that contain IDs only and are unavailable to public subscribers
 - Private reporter–responder conversations on assistance reports, with plain-text messages, author roles, timestamps, unread indicators, retry-safe sends and scoped live refresh
+- Private responder-reported assistance outcomes and reporter-owned confirmations, with retry-safe immutable revisions, pending-confirmation indicators and follow-up flags for partial or negative feedback
 - A separate database message limit of 10 successful messages per minute and 100 per 24 hours per account; retrying a completed client request ID does not count again
 
 ## Community Alerts privacy model
 
 The public feed reads `public.community_alert_feed`, an explicit-field view. It does not expose `source_report_id`, reporter identity, email, private coordinates, raw questionnaire answers, private description, responder identity, or private report/status history. The underlying alert tables are not readable or writable by anonymous visitors. Public writes are unavailable; responder-only security-definer RPCs enforce publication eligibility and append audit history transactionally.
 
-The optional danger-zone coordinates are responder-authored public data and are separate from the reporter's private incident coordinates. The browser requests visitor geolocation only after **Near me** is selected and keeps it in component memory for local distance calculations.
+The optional danger-zone coordinates are responder-authored public data and are separate from the reporter's private incident coordinates. The public map receives only fields already exposed by `community_alert_feed`; it never queries private reports, messages, identities or private report history. The browser requests visitor geolocation only after **Near me** is selected and keeps it in component memory for local distance calculations.
 
 Community-warning submissions use dedicated public latitude, longitude and radius fields. **Use my location for public danger zone** is a separate explicit action and should be used only when the incident is at the reporter's current location. A **Both** submission never copies the private assistance coordinates into the public post. Responders publishing verified alerts may manually enter a danger zone or select the private incident location for review, but must explicitly confirm the public coordinates and radius before publishing.
 
@@ -296,13 +305,17 @@ Authenticated community posts are stored in `community_posts`, separately from `
 
 Private assistance updates use `private_report_events`. RLS permits only authorised responders to read that Realtime signal. Public clients never subscribe to it. An agency handoff can be recorded only after a responder enters the agency, actual handoff time, and a reference or note. Recording that history does not itself contact an agency.
 
+Assistance outcomes are deliberately separate from delivery, acknowledgement, report verification, agency handoff, messages and resolution. A responder may record **Assistance provided** or **Issue attended to**, after which the private report owner sees **Was your issue attended to?** and can answer **Assistance received**, **Partly addressed**, **Assistance not received**, or **Cannot confirm**, with an optional comment. No response is shown as **Awaiting reporter confirmation**. Each later answer creates an immutable revision; partial or negative latest feedback flags the report for responder follow-up without erasing the responder's earlier statement. Responders can read feedback and append follow-up actions but cannot answer for the reporter. Suspension checks apply to both write paths. None of these tables or events are part of `community_alert_feed`, and reporter confirmation is not a prerequisite for urgent public-warning publication.
+
+Outcome Realtime uses `report_outcome_events`, which contains only a report ID and timestamp. RLS restricts events to the report owner and authorised responders; clients refetch the private outcome tables after a permitted event. The subscription is removed when a report panel closes or the user signs out.
+
 Private conversations are linked only to `incident_reports`, so community-only posts have no conversation. `report_messages` is not referenced by either public-feed view. Its RLS policy permits the report owner and authorised responders, while anonymous visitors and unrelated users receive no rows. Direct inserts, updates and deletes are unavailable to browser roles; sending uses a retry-safe RPC and stored author role. Suspended accounts cannot send.
 
 Realtime subscriptions listen only to metadata rows in `private_message_events`, filtered to the currently open report. Message bodies are fetched separately through RLS. The subscription is removed when the report closes or the component unmounts, and reconnecting refetches current messages. Messages do not provide external SMS/email delivery, attachments, public comments, or evidence that officers or emergency services were dispatched.
 
 ## Verification
 
-The current automated suite contains **80 passing tests**. It covers frontend validation, connected-only access boundaries, public-summary generation, alert presentation and proximity boundaries, duplicate warning suppression, inactive-alert exclusion, submission and message-limit contracts, retry counting, concurrency locks, suspension coverage, messaging privacy, Web Push ownership/eligibility/retry/duplicate/unsubscribe contracts, Supabase event wake-up and recovery scheduling, immutable messages, scoped Realtime cleanup, unread behavior, restoration auditing, and unauthorised access, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
+The automated suite covers frontend validation, connected-only access boundaries, public-summary generation, alert presentation and proximity boundaries, interactive-map geometry and privacy contracts, duplicate warning suppression, inactive-alert exclusion, submission and message-limit contracts, retry counting, concurrency locks, suspension coverage, messaging privacy, reporter-outcome ownership, retry safety, immutable revisions and follow-up flags, Web Push ownership/eligibility/retry/duplicate/unsubscribe contracts, Supabase event wake-up and recovery scheduling, immutable messages, scoped Realtime cleanup, unread behavior, restoration auditing, and unauthorised access, plus static migration security checks for RLS, ownership, least-privilege grants, responder membership, transactional history, reason enforcement, and pinned security-definer search paths.
 
 User-observed checks confirmed that an authenticated account could publish a public community warning, an authorised responder could verify it, and removal caused it to disappear from another account's Community Alerts feed.
 
@@ -314,13 +327,16 @@ Without a configured Supabase project, these checks do **not** prove live authen
 
 The abuse-protection and private-messaging migrations have been applied, but complete live verification is still pending. Abuse-protection live verification must cover suspension, restoration, suspended-account reads and writes, and the 24-hour boundary without changing timestamps or deleting receipts. Messaging live verification must use an ordinary report owner, another ordinary user, an authorised responder and a signed-out client to confirm cross-user/public denial, responder access, retry safety, message-limit boundaries, suspension blocking, unread state and Realtime reconnect behavior.
 
+The reporter-outcome migration has been applied. Complete live verification is still pending: use a private, clearly labelled test report to confirm reporter ownership, responder read-only access to reporter answers, retry-safe duplicate submission, immutable revision ordering, partial/negative follow-up flags, suspension enforcement and owner/responder-only Realtime refresh. It must also confirm that signed-out visitors and unrelated users cannot read outcome records or events.
+
 ## Current limitations
 
-- No public incident map, route guidance, SMS fallback, or audio prompts
+- No route guidance, SMS fallback, or audio prompts
 - Private conversations do not support attachments or external SMS/email delivery
 - No offline transmission
 - Nearby GPS monitoring remains foreground-only. Opt-in Web Push can deliver selected-area alerts without continuous GPS, but browser/OS delivery is not guaranteed and there is no offline reporting transmission
 - Destination checks cover the selected area only, not the journey, and do not provide route avoidance
+- Interactive maps depend on an optional configured Stadia tile URL, network access, provider availability and the account's applicable usage limits; place search is disabled
 - Community warnings are unverified unless a responder explicitly verifies them; nearby warnings default to responder-verified information only
 - No agency messaging or rescue-dispatch integration exists; a recorded handoff is documentation, not transmission
 - No emergency service or agency is connected; AlertBridge does not notify or dispatch emergency responders
@@ -329,3 +345,22 @@ The abuse-protection and private-messaging migrations have been applied, but com
 ## Technology
 
 React, TypeScript, Vite, Supabase JavaScript client, PostgreSQL migrations, and Lucide icons.
+
+## Draft English/Hausa localisation
+
+AlertBridge includes a visible selector with English as the default and **Hausa — draft** as the alternate language. When Hausa is selected, the header explains that fluent-speaker review is pending. The browser remembers the preference and the document `lang` attribute follows it. Switching language does not recreate the report form, so typed reports, message drafts, coordinates and edited summaries remain unchanged. Guided summaries change language only when the user explicitly selects Generate or Regenerate. User-written reports, summaries and messages are never translated or rewritten automatically.
+
+The Hausa wording is a **draft**. A fluent Hausa speaker must review all safety-critical wording before production release; no review is claimed yet. Audio prompts remain a later-stage feature.
+
+| English intent | Draft Hausa | Human-review focus |
+| --- | --- | --- |
+| Warn the community | Gargaɗi al’umma | Urgency without implying verification |
+| Request emergency assistance | Nemi taimakon gaggawa | Must not imply agency dispatch |
+| Is it happening now? | Yana faruwa yanzu? | Tense and literacy level |
+| Is anyone injured? | Akwai wanda ya ji rauni? | Sensitive, unambiguous wording |
+| Unverified | Ba a tabbatar ba | Must not imply verified or safe |
+| Was your issue attended to? | An kula da matsalarka? | Attendance versus assistance received |
+| Emergency services are not connected | Ba a haɗa da hukumomin agajin gaggawa ba | Safety and legal accuracy |
+| Delivery is not guaranteed | Ba a tabbatar da isarwa ba | Foreground/background limits |
+
+Draft coverage includes navigation, reporting choices and guided answers, categories, generated summaries, statuses, messaging labels and controls, outcome feedback, notification settings, accessibility language labels, and locale-aware message/outcome dates. English is the fallback for untranslated text and database/provider errors. Long-form explanations and every safety-critical phrase still require side-by-side fluent-speaker review.

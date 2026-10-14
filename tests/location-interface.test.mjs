@@ -14,18 +14,14 @@ test('reporting makes GPS primary and keeps manual coordinates advanced', () => 
   assert.match(app, /Advanced: enter public coordinates manually/)
 })
 
-test('place search is optional, explicit, and does not receive device coordinates', () => {
-  assert.match(placeSearch, /VITE_MAPBOX_ACCESS_TOKEN/)
-  assert.match(placeSearch, /api\.mapbox\.com\/search\/geocode\/v6\/forward/)
-  assert.match(placeSearch, /only after you select Search/)
+test('place search remains disabled and does not receive device coordinates', () => {
   assert.match(placeSearch, /Place search is currently unavailable\./)
-  assert.doesNotMatch(placeSearch, /provider-note|requires a public, URL-restricted/)
-  assert.doesNotMatch(placeSearch, /geolocation|watchPosition|getCurrentPosition/)
+  assert.doesNotMatch(placeSearch, /fetch\(|geolocation|watchPosition|getCurrentPosition|Mapbox/)
 })
 
 test('nearby warnings use one explicit location control and destination does not use current GPS', () => {
   assert.match(feed, /Enable nearby warnings/)
   assert.match(feed, /Your current GPS location is not used as the destination/)
-  assert.match(feed, /Search for a destination/)
+  assert.match(feed, /Pin a destination/)
   assert.match(feed, /Advanced: enter destination coordinates manually/)
 })
